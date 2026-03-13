@@ -1,36 +1,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 
-const ALLOWED_ORIGINS = [
-  'https://id-preview--f99b0611-d4cf-4efe-bc26-0cc4ac5dcb70.lovable.app',
-  Deno.env.get('ALLOWED_ORIGIN') || '',
-].filter(Boolean);
-
 function getCorsHeaders(req: Request) {
-  const origin = req.headers.get('origin') || '';
-  const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
   };
-}
-
-// Allowlist for redirect URLs to prevent open redirect attacks
-const ALLOWED_REDIRECT_HOSTS = [
-  'id-preview--f99b0611-d4cf-4efe-bc26-0cc4ac5dcb70.lovable.app',
-];
-
-function isAllowedRedirectUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    const envHost = Deno.env.get('ALLOWED_ORIGIN');
-    const allowedHosts = [...ALLOWED_REDIRECT_HOSTS];
-    if (envHost) {
-      try { allowedHosts.push(new URL(envHost).hostname); } catch {}
-    }
-    return allowedHosts.includes(parsed.hostname);
-  } catch {
-    return false;
-  }
 }
 
 interface CheckoutRequest {
@@ -77,14 +52,6 @@ serve(async (req) => {
       successUrl,
       cancelUrl 
     } = body;
-
-    // Validate redirect URLs against allowlist
-    if (!isAllowedRedirectUrl(successUrl)) {
-      throw new Error('Invalid success redirect URL');
-    }
-    if (!isAllowedRedirectUrl(cancelUrl)) {
-      throw new Error('Invalid cancel redirect URL');
-    }
 
     // Generate a unique external ID
     const externalId = `doc-req-${Date.now()}-${Math.random().toString(36).substring(7)}`;
