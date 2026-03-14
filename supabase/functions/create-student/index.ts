@@ -1,9 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const ALLOWED_ORIGINS = [
-  'https://id-preview--f99b0611-d4cf-4efe-bc26-0cc4ac5dcb70.lovable.app',
-  Deno.env.get('ALLOWED_ORIGIN') || '',
-].filter(Boolean);
+  'https://document-request.vercel.app',
+];
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get('origin') || '';
@@ -11,6 +10,7 @@ function getCorsHeaders(req: Request) {
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
   };
 }
 
