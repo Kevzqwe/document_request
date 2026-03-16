@@ -81,7 +81,7 @@ const invokeWithAuth = async (fnName: string, body: object) => {
   // ✅ Use direct fetch instead of supabase.functions.invoke
   // This guarantees the Authorization header is sent correctly
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {

@@ -27,23 +27,41 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
+    // ✅ Check Authorization header
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return new Response(JSON.stringify({ error: 'Unauthorized: missing Bearer token' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    const token = authHeader.replace('Bearer ', '');
+    const token = authHeader.replace('Bearer ', '').trim();
+
+    // ✅ Reject if token is not a JWT (real JWTs have 3 dot-separated parts)
+    const isJWT = token.split('.').length === 3;
+    if (!isJWT) {
+      return new Response(JSON.stringify({
+        error: 'Unauthorized: invalid token format. Make sure you are logged in and sending your session token, not the anon key.'
+      }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // ✅ Verify the token is a valid user session
     const { data: { user: caller }, error: authError } = await supabaseAdmin.auth.getUser(token);
     if (authError || !caller) {
-      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+      console.error('Auth error:', authError?.message);
+      return new Response(JSON.stringify({
+        error: `Unauthorized: ${authError?.message || 'Invalid or expired session. Please log in again.'}`
+      }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
+    // ✅ Check admin role
     const { data: roleData } = await supabaseAdmin
       .from('user_roles')
       .select('role')
@@ -58,52 +76,74 @@ Deno.serve(async (req) => {
       });
     }
 
-    const body = await req.json();
-    const { email, password, first_name, last_name, middle_name, contact_number, grade_level, section, student_id } = body;
-
-    if (!email || !password || !first_name || !last_name) {
-      return new Response(JSON.stringify({ error: 'email, password, first_name, and last_name are required' }), {
+    // ✅ Parse body
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
+    const { email, password, first_name, last_name, middle_name, contact_number, grade_level, section, student_id } = body;
+
+    // ✅ Validate required fields
+    if (!email?.trim())      return new Response(JSON.stringify({ error: 'email is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!password?.trim())   return new Response(JSON.stringify({ error: 'password is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!first_name?.trim()) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!last_name?.trim())  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+    // ✅ Create the user
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-      email,
+      email: email.trim().toLowerCase(),
       password,
       email_confirm: true,
       user_metadata: {
         role: 'student',
-        username: email,
-        first_name,
-        last_name,
-        middle_name: middle_name || null,
-        contact_number: contact_number || null,
-        grade_level: grade_level || null,
-        section: section || null,
+        username: email.trim().toLowerCase(),
+        first_name: first_name.trim(),
+        last_name: last_name.trim(),
+        middle_name: middle_name?.trim() || null,
+        contact_number: contact_number?.trim() || null,
+        grade_level: grade_level?.trim() || null,
+        section: section?.trim() || null,
       },
     });
 
     if (createError) {
+      console.error('createUser error:', createError.message);
       return new Response(JSON.stringify({ error: createError.message }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    if (student_id && newUser.user) {
-      await supabaseAdmin
+    // ✅ Update student_id if provided
+    if (student_id?.trim() && newUser.user) {
+      const { error: updateError } = await supabaseAdmin
         .from('students')
-        .update({ student_id })
+        .update({ student_id: student_id.trim() })
         .eq('user_id', newUser.user.id);
+
+      if (updateError) {
+        console.error('student_id update error:', updateError.message);
+      }
     }
 
-    return new Response(JSON.stringify({ success: true, user_id: newUser.user?.id }), {
+    return new Response(JSON.stringify({
+      success: true,
+      user_id: newUser.user?.id,
+      message: `Student account created for ${first_name} ${last_name}`,
+    }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
+    console.error('Unexpected error:', err);
+    return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
