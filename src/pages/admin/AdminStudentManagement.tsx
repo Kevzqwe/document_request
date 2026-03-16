@@ -58,18 +58,27 @@ const emptyForm: StudentFormData = {
   password: '',
 };
 
-// ✅ Helper: invoke edge function with the current session's access token
+// ✅ Helper: invoke edge function with auto-refreshed session token
 const invokeWithAuth = async (fnName: string, body: object) => {
-  const { data: { session } } = await supabase.auth.getSession();
+  // First try to get existing session
+  let { data: { session } } = await supabase.auth.getSession();
 
+  // If session is missing or token is expired, force refresh it
   if (!session?.access_token) {
-    return { data: null, error: new Error('No active session. Please log in again.') };
+    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+    if (refreshError || !refreshed.session?.access_token) {
+      // Force logout if refresh fails — session is unrecoverable
+      await supabase.auth.signOut();
+      window.location.href = '/';
+      return { data: null, error: new Error('Session expired. Please log in again.') };
+    }
+    session = refreshed.session;
   }
 
   return await supabase.functions.invoke(fnName, {
     body,
     headers: {
-      Authorization: `Bearer ${session.access_token}`, // ✅ THIS was missing
+      Authorization: `Bearer ${session.access_token}`, // ✅ always fresh token
     },
   });
 };
