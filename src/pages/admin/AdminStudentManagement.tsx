@@ -9,14 +9,14 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogClose,
 } from '@/components/ui/dialog';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import {
-  Search, Upload, Plus, Edit2, Trash2, Loader2, Users, FileSpreadsheet, AlertTriangle, CheckCircle2, Download,
+  Search, Upload, Plus, Edit2, Trash2, Loader2, Users, FileSpreadsheet, AlertTriangle, CheckCircle2,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -56,6 +56,22 @@ const emptyForm: StudentFormData = {
   section: '',
   student_id: '',
   password: '',
+};
+
+// ✅ Helper: invoke edge function with the current session's access token
+const invokeWithAuth = async (fnName: string, body: object) => {
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (!session?.access_token) {
+    return { data: null, error: new Error('No active session. Please log in again.') };
+  }
+
+  return await supabase.functions.invoke(fnName, {
+    body,
+    headers: {
+      Authorization: `Bearer ${session.access_token}`, // ✅ THIS was missing
+    },
+  });
 };
 
 const AdminStudentManagement = () => {
@@ -108,7 +124,6 @@ const AdminStudentManagement = () => {
     );
   });
 
-  // ── Check for duplicate student by email or student_id ──
   const checkDuplicate = (email: string, studentId?: string | null): string | null => {
     const existingByEmail = students.find(s => s.username.toLowerCase() === email.toLowerCase());
     if (existingByEmail) {
@@ -123,14 +138,18 @@ const AdminStudentManagement = () => {
     return null;
   };
 
-  // ── Add new student via Supabase Auth signup ──
+  // ── Add new student ──
   const handleAddStudent = async () => {
     if (!formData.username || !formData.first_name || !formData.last_name || !formData.password) {
       toast({ title: 'Missing fields', description: 'Email, first name, last name, and password are required.', variant: 'destructive' });
       return;
     }
 
-    // Check for duplicates
+    if (formData.password.length < 6) {
+      toast({ title: 'Weak password', description: 'Password must be at least 6 characters.', variant: 'destructive' });
+      return;
+    }
+
     const dupMessage = checkDuplicate(formData.username, formData.student_id || null);
     if (dupMessage) {
       setDuplicateAlertMessage(dupMessage);
@@ -140,18 +159,17 @@ const AdminStudentManagement = () => {
 
     setSaving(true);
 
-    const { error } = await supabase.functions.invoke('create-student', {
-      body: {
-        email: formData.username,
-        password: formData.password,
-        first_name: formData.first_name,
-        last_name: formData.last_name,
-        middle_name: formData.middle_name || null,
-        contact_number: formData.contact_number || null,
-        grade_level: formData.grade_level || null,
-        section: formData.section || null,
-        student_id: formData.student_id || null,
-      },
+    // ✅ Use invokeWithAuth instead of supabase.functions.invoke directly
+    const { error } = await invokeWithAuth('create-student', {
+      email: formData.username,
+      password: formData.password,
+      first_name: formData.first_name,
+      last_name: formData.last_name,
+      middle_name: formData.middle_name || null,
+      contact_number: formData.contact_number || null,
+      grade_level: formData.grade_level || null,
+      section: formData.section || null,
+      student_id: formData.student_id || null,
     });
 
     if (error) {
@@ -171,7 +189,7 @@ const AdminStudentManagement = () => {
     setSaving(false);
   };
 
-  // ── Edit existing student profile ──
+  // ── Edit existing student ──
   const handleEditStudent = async () => {
     if (!editingStudent) return;
     setSaving(true);
@@ -243,7 +261,6 @@ const AdminStudentManagement = () => {
     setFormOpen(true);
   };
 
-  // ── Accepted header variants for validation ──
   const ACCEPTED_HEADER_VARIANTS: Record<string, string[]> = {
     email: ['email', 'Email', 'username', 'Username'],
     first_name: ['first_name', 'First Name', 'FirstName'],
@@ -260,7 +277,6 @@ const AdminStudentManagement = () => {
     return { valid: missing.length === 0, missing };
   };
 
-  // ── Excel Import ──
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -278,7 +294,6 @@ const AdminStudentManagement = () => {
           return;
         }
 
-        // Validate headers
         const headers = Object.keys(rows[0]);
         const { valid, missing } = validateExcelHeaders(headers);
         if (!valid) {
@@ -301,24 +316,18 @@ const AdminStudentManagement = () => {
           password: r['password'] || r['Password'] || 'changeme123',
         }));
 
-        // Check for duplicates against existing students and within file
         const duplicates: string[] = [];
         const uniqueRows: StudentFormData[] = [];
         const seenEmails = new Set<string>();
 
         for (const row of mapped) {
           if (!row.username || !row.first_name || !row.last_name) continue;
-
           const email = row.username.toLowerCase();
-
-          // Check internal duplicates within the file
           if (seenEmails.has(email)) {
             duplicates.push(`Duplicate in file: ${row.username}`);
             continue;
           }
           seenEmails.add(email);
-
-          // Check against existing database records
           const dupMsg = checkDuplicate(row.username, row.student_id || null);
           if (dupMsg) {
             duplicates.push(dupMsg);
@@ -339,7 +348,6 @@ const AdminStudentManagement = () => {
     e.target.value = '';
   };
 
-
   const handleImportConfirm = async () => {
     setImporting(true);
     let success = 0;
@@ -351,18 +359,17 @@ const AdminStudentManagement = () => {
         continue;
       }
 
-      const { error } = await supabase.functions.invoke('create-student', {
-        body: {
-          email: row.username,
-          password: row.password || 'changeme123',
-          first_name: row.first_name,
-          last_name: row.last_name,
-          middle_name: row.middle_name || null,
-          contact_number: row.contact_number || null,
-          grade_level: row.grade_level || null,
-          section: row.section || null,
-          student_id: row.student_id || null,
-        },
+      // ✅ Use invokeWithAuth for import too
+      const { error } = await invokeWithAuth('create-student', {
+        email: row.username,
+        password: row.password || 'changeme123',
+        first_name: row.first_name,
+        last_name: row.last_name,
+        middle_name: row.middle_name || null,
+        contact_number: row.contact_number || null,
+        grade_level: row.grade_level || null,
+        section: row.section || null,
+        student_id: row.student_id || null,
       });
 
       if (error) failed++;
@@ -477,6 +484,10 @@ const AdminStudentManagement = () => {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingStudent ? 'Edit Student' : 'Add New Student'}</DialogTitle>
+            {/* ✅ fixes the aria-describedby warning */}
+            <DialogDescription>
+              {editingStudent ? 'Update the student profile information below.' : 'Fill in the details to create a new student account.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-4">
             {!editingStudent && (
@@ -595,9 +606,12 @@ const AdminStudentManagement = () => {
               <FileSpreadsheet className="w-5 h-5" />
               Import Preview — {importPreview.length} students
             </DialogTitle>
+            {/* ✅ fixes the aria-describedby warning for this dialog too */}
+            <DialogDescription>
+              Review the students below before confirming the import.
+            </DialogDescription>
           </DialogHeader>
 
-          {/* Duplicates warning */}
           {importDuplicates.length > 0 && (
             <div className="border border-amber-300 bg-amber-50 dark:bg-amber-950/30 rounded-md p-3 space-y-2">
               <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-medium text-sm">
