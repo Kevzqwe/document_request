@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { fetchUserProfile, getRedirectPath, type UserProfile, type AuthUser } from '@/lib/auth';
@@ -28,90 +28,141 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
+  const initialized = useRef(false); // ✅ guard against double fetch on mount
+
+  // ✅ Helper: clear all auth state and redirect to login
+  const clearAuthState = async (redirect = true) => {
+    setUser(null);
+    setProfile(null);
+    setIsLoading(false);
+    if (redirect) navigate('/');
+  };
+
+  // ✅ Helper: set user + fetch profile from a session user object
+  const hydrateUserFromSession = async (sessionUser: { id: string; email?: string | null }) => {
+    const authUser: AuthUser = {
+      id: sessionUser.id,
+      email: sessionUser.email || '',
+    };
+    setUser(authUser);
+
+    const userProfile = await fetchUserProfile(sessionUser.id);
+    setProfile(userProfile);
+    setIsLoading(false);
+
+    return userProfile;
+  };
 
   useEffect(() => {
-    // Listen for auth state changes FIRST
+    // ✅ Step 1: Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        if (session?.user) {
-          const authUser: AuthUser = {
-            id: session.user.id,
-            email: session.user.email || '',
-          };
-          setUser(authUser);
+        // Skip duplicate handling before getSession() initializes
+        if (!initialized.current) return;
 
-          // Fetch profile with setTimeout to avoid deadlock with Supabase
+        // ✅ Handle token expiry / sign out events
+        if (
+          event === 'SIGNED_OUT' ||
+          (event === 'TOKEN_REFRESHED' && !session)
+        ) {
+          await clearAuthState();
+          return;
+        }
+
+        // ✅ Handle password recovery or user updates
+        if (event === 'PASSWORD_RECOVERY') {
+          return;
+        }
+
+        if (session?.user) {
+          // Use setTimeout to avoid Supabase internal deadlock
           setTimeout(async () => {
-            const userProfile = await fetchUserProfile(session.user.id);
-            setProfile(userProfile);
-            setIsLoading(false);
+            await hydrateUserFromSession(session.user);
           }, 0);
         } else {
-          setUser(null);
-          setProfile(null);
-          setIsLoading(false);
+          await clearAuthState();
         }
       }
     );
 
-    // Then check existing session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session?.user) {
-        const authUser: AuthUser = {
-          id: session.user.id,
-          email: session.user.email || '',
-        };
-        setUser(authUser);
-        const userProfile = await fetchUserProfile(session.user.id);
-        setProfile(userProfile);
+    // ✅ Step 2: Check existing session on mount
+    const initSession = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+
+        if (error) {
+          console.error('Session retrieval error:', error.message);
+          // ✅ Clear any stale/corrupted tokens
+          await supabase.auth.signOut();
+          await clearAuthState();
+          return;
+        }
+
+        if (session?.user) {
+          await hydrateUserFromSession(session.user);
+        } else {
+          setIsLoading(false);
+        }
+      } catch (err) {
+        console.error('Unexpected error during session init:', err);
+        await supabase.auth.signOut();
+        await clearAuthState();
+      } finally {
+        initialized.current = true; // ✅ Allow onAuthStateChange to process future events
       }
-      setIsLoading(false);
-    });
+    };
+
+    initSession();
 
     return () => subscription.unsubscribe();
   }, []);
 
   const login = async (email: string, password: string): Promise<{ error: string | null }> => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-    if (error) {
-      return { error: error.message };
-    }
-
-    if (data.user) {
-      const authUser: AuthUser = {
-        id: data.user.id,
-        email: data.user.email || '',
-      };
-      setUser(authUser);
-
-      const userProfile = await fetchUserProfile(data.user.id);
-      setProfile(userProfile);
-
-      if (userProfile) {
-        const redirectPath = getRedirectPath(userProfile.role);
-        navigate(redirectPath);
+      if (error) {
+        return { error: error.message };
       }
-    }
 
-    return { error: null };
+      if (data.user) {
+        const userProfile = await hydrateUserFromSession(data.user);
+
+        if (userProfile) {
+          const redirectPath = getRedirectPath(userProfile.role);
+          navigate(redirectPath);
+        }
+      }
+
+      return { error: null };
+    } catch (err) {
+      console.error('Login error:', err);
+      return { error: 'An unexpected error occurred. Please try again.' };
+    }
   };
 
   const refreshProfile = async () => {
-    if (user) {
+    if (!user) return;
+
+    try {
       const userProfile = await fetchUserProfile(user.id);
       setProfile(userProfile);
+    } catch (err) {
+      console.error('Failed to refresh profile:', err);
     }
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
-    setProfile(null);
-    navigate('/');
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      // ✅ Always clear state even if signOut fails
+      setUser(null);
+      setProfile(null);
+      navigate('/');
+    }
   };
 
   return (
