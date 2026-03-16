@@ -58,29 +58,52 @@ const emptyForm: StudentFormData = {
   password: '',
 };
 
-// ✅ Helper: invoke edge function with auto-refreshed session token
+// ✅ Helper: invoke edge function using direct fetch with a force-refreshed token
 const invokeWithAuth = async (fnName: string, body: object) => {
-  // First try to get existing session
-  let { data: { session } } = await supabase.auth.getSession();
+  // ✅ Always force-refresh to guarantee a valid token on any device
+  const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
 
-  // If session is missing or token is expired, force refresh it
-  if (!session?.access_token) {
-    const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-    if (refreshError || !refreshed.session?.access_token) {
-      // Force logout if refresh fails — session is unrecoverable
-      await supabase.auth.signOut();
-      window.location.href = '/';
-      return { data: null, error: new Error('Session expired. Please log in again.') };
-    }
-    session = refreshed.session;
+  let token = refreshed?.session?.access_token;
+
+  // If refresh fails, fall back to existing session
+  if (refreshError || !token) {
+    const { data: { session: existing } } = await supabase.auth.getSession();
+    token = existing?.access_token;
   }
 
-  return await supabase.functions.invoke(fnName, {
-    body,
-    headers: {
-      Authorization: `Bearer ${session.access_token}`, // ✅ always fresh token
-    },
-  });
+  // If still no token, user is not logged in — redirect to login
+  if (!token) {
+    await supabase.auth.signOut();
+    window.location.href = '/';
+    return { data: null, error: new Error('Session expired. Please log in again.') };
+  }
+
+  // ✅ Use direct fetch instead of supabase.functions.invoke
+  // This guarantees the Authorization header is sent correctly
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'apikey': supabaseAnonKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return { data: null, error: new Error(data?.error || `Request failed with status ${response.status}`) };
+    }
+
+    return { data, error: null };
+  } catch (err: any) {
+    return { data: null, error: new Error(err.message || 'Network error') };
+  }
 };
 
 const AdminStudentManagement = () => {
