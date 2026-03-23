@@ -23,76 +23,138 @@ import {
   Calendar,
   CheckCircle,
 } from 'lucide-react';
-import { requestStorage, StoredRequest } from '@/lib/requestStorage';
+import { supabase } from '@/lib/supabase'; // adjust path if needed
+
+// ── Types matching your Supabase schema ──────────────────────────────────────
+interface DocumentRequest {
+  id: string;
+  user_id: string;
+  request_number: number;
+  student_name: string;
+  contact_number: string;
+  grade_level: string;
+  section: string;
+  status: string;
+  payment_method: string;
+  total_amount: number;
+  created_at: string;
+  updated_at: string;
+  document_request_items: { document_type: string; price: number }[];
+}
+
+const COLORS = ['#8B5CF6', '#EC4899', '#3B82F6', '#10B981', '#F59E0B'];
 
 const AdminAnalytics = () => {
-  const [requests, setRequests] = useState<StoredRequest[]>([]);
+  const [requests, setRequests] = useState<DocumentRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Get ALL requests: active + archived, then deduplicate by id
-    const active = requestStorage.getAll();
-    const archived = requestStorage.getArchived();
+    const fetchAllRequests = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // Fetch ALL document requests regardless of status,
+        // and join document_request_items for document types
+        const { data, error: fetchError } = await supabase
+          .from('document_requests')
+          .select(`
+            id,
+            user_id,
+            request_number,
+            student_name,
+            contact_number,
+            grade_level,
+            section,
+            status,
+            payment_method,
+            total_amount,
+            created_at,
+            updated_at,
+            document_request_items (
+              document_type,
+              price
+            )
+          `)
+          .order('request_number', { ascending: true });
 
-    const allMap = new Map<string, StoredRequest>();
-    [...active, ...archived].forEach(r => allMap.set(r.id, r));
-    const allRequests = Array.from(allMap.values());
+        if (fetchError) throw fetchError;
+        setRequests((data as DocumentRequest[]) || []);
+      } catch (err: any) {
+        console.error('Analytics fetch error:', err);
+        setError(err.message || 'Failed to load analytics data');
+      } finally {
+        setLoading(false);
+      }
+    };
 
-    setRequests(allRequests);
+    fetchAllRequests();
   }, []);
 
-  // ── Stats ────────────────────────────────────────────────────────────────────
+  // ── Derived stats ────────────────────────────────────────────────────────────
   const totalRequests = requests.length;
-  const completedRequests = requests.filter(r => r.status === 'Completed').length;
 
-  // Sum revenue from ALL requests (cash AND online, any status)
-  const totalRevenue = requests.reduce((sum, r) => {
-    const amount = parseFloat(r.amount.replace(/[^0-9.]/g, '') || '0');
-    return sum + amount;
-  }, 0);
+  const completedRequests = requests.filter(
+    r => r.status.toLowerCase() === 'completed'
+  ).length;
+
+  // Total revenue = sum of total_amount from ALL requests
+  const totalRevenue = requests.reduce((sum, r) => sum + Number(r.total_amount ?? 0), 0);
 
   const completionRate =
     totalRequests > 0 ? ((completedRequests / totalRequests) * 100).toFixed(1) : '0';
 
+  const processingCount = requests.filter(
+    r => r.status.toLowerCase() === 'processing'
+  ).length;
+
+  const uniqueStudents = new Set(requests.map(r => r.user_id)).size;
+
   // ── Requests by month ────────────────────────────────────────────────────────
   const requestsByMonth = requests.reduce(
-    (acc, request) => {
-      const month = new Date(request.requestDate).toLocaleString('en-US', { month: 'short' });
+    (acc, r) => {
+      const month = new Date(r.created_at).toLocaleString('en-US', { month: 'short' });
       const existing = acc.find(item => item.month === month);
       if (existing) {
         existing.requests += 1;
-        if (request.status === 'Completed') existing.completed += 1;
+        if (r.status.toLowerCase() === 'completed') existing.completed += 1;
       } else {
-        acc.push({ month, requests: 1, completed: request.status === 'Completed' ? 1 : 0 });
+        acc.push({
+          month,
+          requests: 1,
+          completed: r.status.toLowerCase() === 'completed' ? 1 : 0,
+        });
       }
       return acc;
     },
     [] as { month: string; requests: number; completed: number }[]
   );
 
-  // ── Document type distribution ───────────────────────────────────────────────
+  // ── Document type distribution (from joined items) ───────────────────────────
   const documentTypeCounts = requests.reduce(
-    (acc, request) => {
-      request.documents.forEach(doc => {
-        const existing = acc.find(d => d.name === doc);
+    (acc, r) => {
+      (r.document_request_items || []).forEach(item => {
+        const existing = acc.find(d => d.name === item.document_type);
         if (existing) existing.value += 1;
-        else acc.push({ name: doc, value: 1 });
+        else acc.push({ name: item.document_type, value: 1 });
       });
       return acc;
     },
     [] as { name: string; value: number }[]
   );
 
-  const COLORS = ['#8B5CF6', '#EC4899', '#3B82F6', '#10B981', '#F59E0B'];
   const documentTypes = documentTypeCounts.map((doc, index) => ({
     ...doc,
     color: COLORS[index % COLORS.length],
   }));
 
-  // ── Payment methods — includes ALL requests (cash + online) ─────────────────
+  // ── Payment methods — group by payment_method from document_requests ─────────
   const paymentMethodCounts = requests.reduce(
-    (acc, request) => {
-      const amount = parseFloat(request.amount.replace(/[^0-9.]/g, '') || '0');
-      const method = request.paymentMethod || 'Unknown';
+    (acc, r) => {
+      const method = r.payment_method
+        ? r.payment_method.charAt(0).toUpperCase() + r.payment_method.slice(1).toLowerCase()
+        : 'Unknown';
+      const amount = Number(r.total_amount ?? 0);
       const existing = acc.find(p => p.method === method);
       if (existing) {
         existing.amount += amount;
@@ -113,9 +175,9 @@ const AdminAnalytics = () => {
 
   // ── Revenue by month ─────────────────────────────────────────────────────────
   const revenueByMonth = requests.reduce(
-    (acc, request) => {
-      const month = new Date(request.requestDate).toLocaleString('en-US', { month: 'short' });
-      const amount = parseFloat(request.amount.replace(/[^0-9.]/g, '') || '0');
+    (acc, r) => {
+      const month = new Date(r.created_at).toLocaleString('en-US', { month: 'short' });
+      const amount = Number(r.total_amount ?? 0);
       const existing = acc.find(item => item.month === month);
       if (existing) existing.revenue += amount;
       else acc.push({ month, revenue: amount });
@@ -135,7 +197,7 @@ const AdminAnalytics = () => {
     },
     {
       title: 'Total Students',
-      value: new Set(requests.map(r => r.studentName)).size.toString(),
+      value: uniqueStudents.toString(),
       icon: Users,
       color: 'text-success',
       bgColor: 'bg-success/10',
@@ -163,12 +225,29 @@ const AdminAnalytics = () => {
     },
     {
       title: 'Processing',
-      value: requests.filter(r => r.status === 'Processing').length.toString(),
+      value: processingCount.toString(),
       icon: TrendingUp,
       color: 'text-success',
       bgColor: 'bg-success/10',
     },
   ];
+
+  // ── Loading / error states ───────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-muted-foreground animate-pulse">Loading analytics...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-destructive text-sm">Error: {error}</div>
+      </div>
+    );
+  }
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
