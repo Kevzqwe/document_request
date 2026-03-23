@@ -29,46 +29,58 @@ const AdminAnalytics = () => {
   const [requests, setRequests] = useState<StoredRequest[]>([]);
 
   useEffect(() => {
-    // Get both active and archived requests for complete analytics
-    const allRequests = [...requestStorage.getAll(), ...requestStorage.getArchived()];
+    // Get ALL requests: active + archived, then deduplicate by id
+    const active = requestStorage.getAll();
+    const archived = requestStorage.getArchived();
+
+    const allMap = new Map<string, StoredRequest>();
+    [...active, ...archived].forEach(r => allMap.set(r.id, r));
+    const allRequests = Array.from(allMap.values());
+
     setRequests(allRequests);
   }, []);
 
-  // Calculate stats from real data
+  // ── Stats ────────────────────────────────────────────────────────────────────
   const totalRequests = requests.length;
   const completedRequests = requests.filter(r => r.status === 'Completed').length;
-  const totalRevenue = requests.reduce((sum, r) => sum + parseFloat(r.amount.replace(/[^0-9.]/g, '') || '0'), 0);
-  const completionRate = totalRequests > 0 ? ((completedRequests / totalRequests) * 100).toFixed(1) : '0';
 
-  // Group requests by month
-  const requestsByMonth = requests.reduce((acc, request) => {
-    const month = new Date(request.requestDate).toLocaleString('en-US', { month: 'short' });
-    const existing = acc.find(item => item.month === month);
-    if (existing) {
-      existing.requests += 1;
-      if (request.status === 'Completed') existing.completed += 1;
-    } else {
-      acc.push({
-        month,
-        requests: 1,
-        completed: request.status === 'Completed' ? 1 : 0,
-      });
-    }
-    return acc;
-  }, [] as { month: string; requests: number; completed: number }[]);
+  // Sum revenue from ALL requests (cash AND online, any status)
+  const totalRevenue = requests.reduce((sum, r) => {
+    const amount = parseFloat(r.amount.replace(/[^0-9.]/g, '') || '0');
+    return sum + amount;
+  }, 0);
 
-  // Group by document type
-  const documentTypeCounts = requests.reduce((acc, request) => {
-    request.documents.forEach(doc => {
-      const existing = acc.find(d => d.name === doc);
+  const completionRate =
+    totalRequests > 0 ? ((completedRequests / totalRequests) * 100).toFixed(1) : '0';
+
+  // ── Requests by month ────────────────────────────────────────────────────────
+  const requestsByMonth = requests.reduce(
+    (acc, request) => {
+      const month = new Date(request.requestDate).toLocaleString('en-US', { month: 'short' });
+      const existing = acc.find(item => item.month === month);
       if (existing) {
-        existing.value += 1;
+        existing.requests += 1;
+        if (request.status === 'Completed') existing.completed += 1;
       } else {
-        acc.push({ name: doc, value: 1 });
+        acc.push({ month, requests: 1, completed: request.status === 'Completed' ? 1 : 0 });
       }
-    });
-    return acc;
-  }, [] as { name: string; value: number }[]);
+      return acc;
+    },
+    [] as { month: string; requests: number; completed: number }[]
+  );
+
+  // ── Document type distribution ───────────────────────────────────────────────
+  const documentTypeCounts = requests.reduce(
+    (acc, request) => {
+      request.documents.forEach(doc => {
+        const existing = acc.find(d => d.name === doc);
+        if (existing) existing.value += 1;
+        else acc.push({ name: doc, value: 1 });
+      });
+      return acc;
+    },
+    [] as { name: string; value: number }[]
+  );
 
   const COLORS = ['#8B5CF6', '#EC4899', '#3B82F6', '#10B981', '#F59E0B'];
   const documentTypes = documentTypeCounts.map((doc, index) => ({
@@ -76,18 +88,22 @@ const AdminAnalytics = () => {
     color: COLORS[index % COLORS.length],
   }));
 
-  // Group by payment method
-  const paymentMethodCounts = requests.reduce((acc, request) => {
-    const amount = parseFloat(request.amount.replace(/[^0-9.]/g, '') || '0');
-    const existing = acc.find(p => p.method === request.paymentMethod);
-    if (existing) {
-      existing.amount += amount;
-      existing.count += 1;
-    } else {
-      acc.push({ method: request.paymentMethod, amount: amount, count: 1 });
-    }
-    return acc;
-  }, [] as { method: string; amount: number; count: number }[]);
+  // ── Payment methods — includes ALL requests (cash + online) ─────────────────
+  const paymentMethodCounts = requests.reduce(
+    (acc, request) => {
+      const amount = parseFloat(request.amount.replace(/[^0-9.]/g, '') || '0');
+      const method = request.paymentMethod || 'Unknown';
+      const existing = acc.find(p => p.method === method);
+      if (existing) {
+        existing.amount += amount;
+        existing.count += 1;
+      } else {
+        acc.push({ method, amount, count: 1 });
+      }
+      return acc;
+    },
+    [] as { method: string; amount: number; count: number }[]
+  );
 
   const totalPayments = paymentMethodCounts.reduce((sum, p) => sum + p.amount, 0);
   const paymentMethods = paymentMethodCounts.map(p => ({
@@ -95,19 +111,20 @@ const AdminAnalytics = () => {
     percentage: totalPayments > 0 ? Math.round((p.amount / totalPayments) * 100) : 0,
   }));
 
-  // Revenue by month
-  const revenueByMonth = requests.reduce((acc, request) => {
-    const month = new Date(request.requestDate).toLocaleString('en-US', { month: 'short' });
-    const amount = parseFloat(request.amount.replace(/[^0-9.]/g, '') || '0');
-    const existing = acc.find(item => item.month === month);
-    if (existing) {
-      existing.revenue += amount;
-    } else {
-      acc.push({ month, revenue: amount });
-    }
-    return acc;
-  }, [] as { month: string; revenue: number }[]);
+  // ── Revenue by month ─────────────────────────────────────────────────────────
+  const revenueByMonth = requests.reduce(
+    (acc, request) => {
+      const month = new Date(request.requestDate).toLocaleString('en-US', { month: 'short' });
+      const amount = parseFloat(request.amount.replace(/[^0-9.]/g, '') || '0');
+      const existing = acc.find(item => item.month === month);
+      if (existing) existing.revenue += amount;
+      else acc.push({ month, revenue: amount });
+      return acc;
+    },
+    [] as { month: string; revenue: number }[]
+  );
 
+  // ── Stat cards ───────────────────────────────────────────────────────────────
   const stats = [
     {
       title: 'Total Requests',
@@ -153,6 +170,7 @@ const AdminAnalytics = () => {
     },
   ];
 
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       {/* Stats Grid */}
@@ -178,7 +196,6 @@ const AdminAnalytics = () => {
 
       {/* Charts Row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Requests Trend */}
         <Card className="border-2">
           <CardHeader>
             <CardTitle>Requests Trend</CardTitle>
@@ -189,7 +206,7 @@ const AdminAnalytics = () => {
                 <BarChart data={requestsByMonth}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="month" />
-                  <YAxis />
+                  <YAxis allowDecimals={false} />
                   <Tooltip />
                   <Legend />
                   <Bar dataKey="requests" fill="#8B5CF6" name="Total Requests" />
@@ -204,7 +221,6 @@ const AdminAnalytics = () => {
           </CardContent>
         </Card>
 
-        {/* Document Types Distribution */}
         <Card className="border-2">
           <CardHeader>
             <CardTitle>Document Types Distribution</CardTitle>
@@ -243,7 +259,6 @@ const AdminAnalytics = () => {
 
       {/* Charts Row 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Revenue Trend */}
         <Card className="border-2">
           <CardHeader>
             <CardTitle>Revenue Trend</CardTitle>
@@ -274,7 +289,6 @@ const AdminAnalytics = () => {
           </CardContent>
         </Card>
 
-        {/* Payment Methods */}
         <Card className="border-2">
           <CardHeader>
             <CardTitle>Payment Methods</CardTitle>
@@ -287,7 +301,7 @@ const AdminAnalytics = () => {
                     <div className="flex justify-between items-center mb-2">
                       <span className="font-semibold">{payment.method}</span>
                       <span className="text-sm text-muted-foreground">
-                        {payment.percentage}%
+                        {payment.count} request{payment.count !== 1 ? 's' : ''} · {payment.percentage}%
                       </span>
                     </div>
                     <div className="flex items-center gap-4">
@@ -326,13 +340,11 @@ const AdminAnalytics = () => {
                   <tr className="border-b">
                     <th className="text-left py-3 px-4 font-semibold">Rank</th>
                     <th className="text-left py-3 px-4 font-semibold">Document</th>
-                    <th className="text-left py-3 px-4 font-semibold">
-                      Total Requests
-                    </th>
+                    <th className="text-left py-3 px-4 font-semibold">Total Requests</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {documentTypes
+                  {[...documentTypes]
                     .sort((a, b) => b.value - a.value)
                     .map((doc, index) => (
                       <tr key={index} className="border-b hover:bg-muted/50">
