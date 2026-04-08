@@ -14,7 +14,6 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-// ✅ Safely convert any value to trimmed string (fixes Excel numeric values)
 function toStr(val: any): string {
   if (val === null || val === undefined) return '';
   return String(val).trim();
@@ -28,10 +27,10 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    );
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
     const authHeader = req.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -85,7 +84,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ✅ Convert all fields to string - fixes Excel sending numbers
     const email          = toStr(body.email);
     const password       = toStr(body.password);
     const first_name     = toStr(body.first_name);
@@ -101,7 +99,6 @@ Deno.serve(async (req) => {
     if (!first_name) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     if (!last_name)  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
-    // ✅ Create the user
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: email.toLowerCase(),
       password,
@@ -126,7 +123,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ✅ Update student_id if provided
     if (student_id && newUser.user) {
       const { error: updateError } = await supabaseAdmin
         .from('students')
@@ -138,11 +134,8 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ✅ Send welcome email via send-gmail function
+    // ✅ Send welcome email using SERVICE_ROLE_KEY
     try {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL');
-      const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
-
       console.log('Calling send-gmail for:', email);
 
       const emailRes = await fetch(
@@ -151,8 +144,8 @@ Deno.serve(async (req) => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${supabaseAnonKey}`,
-            'apikey': supabaseAnonKey!,
+            'Authorization': `Bearer ${serviceRoleKey}`,
+            'apikey': serviceRoleKey,
           },
           body: JSON.stringify({
             to: email.toLowerCase(),
@@ -170,7 +163,6 @@ Deno.serve(async (req) => {
         console.log('Welcome email sent successfully to:', email);
       }
     } catch (emailErr: any) {
-      // Don't fail student creation if email fails
       console.error('Email error (non-critical):', emailErr.message);
     }
 
