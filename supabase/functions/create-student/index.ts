@@ -101,6 +101,7 @@ Deno.serve(async (req) => {
     if (!first_name) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     if (!last_name)  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
+    // ✅ Create the user
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: email.toLowerCase(),
       password,
@@ -125,6 +126,7 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ✅ Update student_id if provided
     if (student_id && newUser.user) {
       const { error: updateError } = await supabaseAdmin
         .from('students')
@@ -136,10 +138,40 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ✅ Send welcome email via send-gmail function
+    try {
+      const emailRes = await fetch(
+        `${Deno.env.get('SUPABASE_URL')}/functions/v1/send-gmail`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_ANON_KEY')}`,
+          },
+          body: JSON.stringify({
+            to: email.toLowerCase(),
+            studentName: `${first_name} ${last_name}`,
+            email: email.toLowerCase(),
+            password: password,
+          }),
+        }
+      );
+
+      const emailData = await emailRes.json();
+      if (!emailRes.ok) {
+        console.error('Email sending failed:', emailData);
+      } else {
+        console.log('Welcome email sent to:', email);
+      }
+    } catch (emailErr: any) {
+      // Don't fail student creation if email fails
+      console.error('Email error (non-critical):', emailErr.message);
+    }
+
     return new Response(JSON.stringify({
       success: true,
       user_id: newUser.user?.id,
-      message: `Student account created for ${first_name} ${last_name}`,
+      message: `Student account created for ${first_name} ${last_name}. Welcome email sent to ${email}.`,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
