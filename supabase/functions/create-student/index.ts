@@ -14,6 +14,12 @@ function getCorsHeaders(req: Request) {
   };
 }
 
+// ✅ Safely convert any value to trimmed string (fixes Excel numeric values)
+function toStr(val: any): string {
+  if (val === null || val === undefined) return '';
+  return String(val).trim();
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -27,7 +33,6 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    // ✅ Check Authorization header
     const authHeader = req.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Unauthorized: missing Bearer token' }), {
@@ -38,30 +43,24 @@ Deno.serve(async (req) => {
 
     const token = authHeader.replace('Bearer ', '').trim();
 
-    // ✅ Reject if token is not a JWT (real JWTs have 3 dot-separated parts)
     const isJWT = token.split('.').length === 3;
     if (!isJWT) {
-      return new Response(JSON.stringify({
-        error: 'Unauthorized: invalid token format. Make sure you are logged in and sending your session token, not the anon key.'
-      }), {
+      return new Response(JSON.stringify({ error: 'Unauthorized: invalid token format.' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // ✅ Verify the token is a valid user session
     const { data: { user: caller }, error: authError } = await supabaseAdmin.auth.getUser(token);
     if (authError || !caller) {
-      console.error('Auth error:', authError?.message);
       return new Response(JSON.stringify({
-        error: `Unauthorized: ${authError?.message || 'Invalid or expired session. Please log in again.'}`
+        error: `Unauthorized: ${authError?.message || 'Invalid or expired session.'}`,
       }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // ✅ Check admin role
     const { data: roleData } = await supabaseAdmin
       .from('user_roles')
       .select('role')
@@ -76,7 +75,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ✅ Parse body
     let body: any;
     try {
       body = await req.json();
@@ -87,28 +85,35 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { email, password, first_name, last_name, middle_name, contact_number, grade_level, section, student_id } = body;
+    // ✅ Convert all fields to string - fixes Excel sending numbers
+    const email          = toStr(body.email);
+    const password       = toStr(body.password);
+    const first_name     = toStr(body.first_name);
+    const last_name      = toStr(body.last_name);
+    const middle_name    = toStr(body.middle_name);
+    const contact_number = toStr(body.contact_number);
+    const grade_level    = toStr(body.grade_level);
+    const section        = toStr(body.section);
+    const student_id     = toStr(body.student_id);
 
-    // ✅ Validate required fields
-    if (!email?.trim())      return new Response(JSON.stringify({ error: 'email is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!password?.trim())   return new Response(JSON.stringify({ error: 'password is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!first_name?.trim()) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!last_name?.trim())  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!email)      return new Response(JSON.stringify({ error: 'email is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!password)   return new Response(JSON.stringify({ error: 'password is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!first_name) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!last_name)  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
-    // ✅ Create the user
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-      email: email.trim().toLowerCase(),
+      email: email.toLowerCase(),
       password,
       email_confirm: true,
       user_metadata: {
         role: 'student',
-        username: email.trim().toLowerCase(),
-        first_name: first_name.trim(),
-        last_name: last_name.trim(),
-        middle_name: middle_name?.trim() || null,
-        contact_number: contact_number?.trim() || null,
-        grade_level: grade_level?.trim() || null,
-        section: section?.trim() || null,
+        username: email.toLowerCase(),
+        first_name,
+        last_name,
+        middle_name: middle_name || null,
+        contact_number: contact_number || null,
+        grade_level: grade_level || null,
+        section: section || null,
       },
     });
 
@@ -120,11 +125,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ✅ Update student_id if provided
-    if (student_id?.trim() && newUser.user) {
+    if (student_id && newUser.user) {
       const { error: updateError } = await supabaseAdmin
         .from('students')
-        .update({ student_id: student_id.trim() })
+        .update({ student_id })
         .eq('user_id', newUser.user.id);
 
       if (updateError) {
@@ -141,7 +145,7 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
-  } catch (err) {
+  } catch (err: any) {
     console.error('Unexpected error:', err);
     return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {
       status: 500,
