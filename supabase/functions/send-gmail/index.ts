@@ -1,21 +1,11 @@
-import { SmtpClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { createTransport } from "npm:nodemailer@6.9.9";
 
-const ALLOWED_ORIGINS = [
-  'https://document-request.vercel.app',
-];
-
-function getCorsHeaders(req: Request) {
-  const origin = req.headers.get('origin') || '';
-  const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
-  return {
-    'Access-Control-Allow-Origin': allowedOrigin,
+Deno.serve(async (req) => {
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
   };
-}
-
-Deno.serve(async (req) => {
-  const corsHeaders = getCorsHeaders(req);
 
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -26,7 +16,7 @@ Deno.serve(async (req) => {
     const gmailPassword = Deno.env.get('GMAIL_APP_PASSWORD');
 
     if (!gmailUser || !gmailPassword) {
-      throw new Error('Gmail credentials not configured. Set GMAIL_USER and GMAIL_APP_PASSWORD.');
+      throw new Error('Gmail credentials not configured.');
     }
 
     const body = await req.json();
@@ -34,23 +24,22 @@ Deno.serve(async (req) => {
 
     if (!to || !studentName || !email || !password) {
       return new Response(
-        JSON.stringify({ error: 'Missing required fields: to, studentName, email, password' }),
+        JSON.stringify({ error: 'Missing required fields' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     console.log('Sending email to:', to);
 
-    const client = new SmtpClient();
-
-    await client.connectTLS({
-      hostname: 'smtp.gmail.com',
-      port: 465,
-      username: gmailUser,
-      password: gmailPassword,
+    const transporter = createTransport({
+      service: 'gmail',
+      auth: {
+        user: gmailUser,
+        pass: gmailPassword,
+      },
     });
 
-    await client.send({
+    await transporter.sendMail({
       from: `PCS Document Request System <${gmailUser}>`,
       to: to,
       subject: 'Your Student Account Has Been Created - PCS Document Request System',
@@ -80,13 +69,11 @@ Deno.serve(async (req) => {
               </p>
             </div>
 
-            <p style="color: #374151; font-size: 15px;">You can access the system using the link below:</p>
             <a href="https://document-request.vercel.app"
                style="display: inline-block; background-color: #16a34a; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 15px; margin: 10px 0;">
               Login to PCS DRS
             </a>
 
-            <p style="color: #374151; font-size: 15px;">If you have any questions, please contact the Registrar's Office.</p>
             <p style="color: #374151; font-size: 15px;">Best regards,<br><strong>PCS Registrar's Office</strong></p>
           </div>
           <div style="background: #f9fafb; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
@@ -95,8 +82,6 @@ Deno.serve(async (req) => {
         </div>
       `,
     });
-
-    await client.close();
 
     console.log('Email sent successfully to:', to);
 
