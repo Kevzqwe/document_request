@@ -1,4 +1,4 @@
-import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { SmtpClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 
 const ALLOWED_ORIGINS = [
   'https://document-request.vercel.app',
@@ -14,7 +14,7 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
   if (req.method === 'OPTIONS') {
@@ -22,9 +22,11 @@ serve(async (req) => {
   }
 
   try {
-    const resendApiKey = Deno.env.get('RESEND_API_KEY');
-    if (!resendApiKey) {
-      throw new Error('RESEND_API_KEY not configured');
+    const gmailUser = Deno.env.get('GMAIL_USER');
+    const gmailPassword = Deno.env.get('GMAIL_APP_PASSWORD');
+
+    if (!gmailUser || !gmailPassword) {
+      throw new Error('Gmail credentials not configured. Set GMAIL_USER and GMAIL_APP_PASSWORD.');
     }
 
     const body = await req.json();
@@ -37,92 +39,69 @@ serve(async (req) => {
       );
     }
 
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${resendApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: 'PCS Document Request System <onboarding@resend.dev>',
-        to: [to],
-        subject: 'Your Student Account Has Been Created - PCS Document Request System',
-        html: `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <style>
-              body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 0; padding: 0; }
-              .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-              .header { background-color: #16a34a; padding: 30px; text-align: center; }
-              .header h1 { color: white; margin: 0; font-size: 22px; }
-              .header p { color: #d1fae5; margin: 5px 0 0; font-size: 14px; }
-              .body { padding: 30px; }
-              .body p { color: #374151; font-size: 15px; line-height: 1.6; }
-              .credentials { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 20px; margin: 20px 0; }
-              .credentials h3 { color: #15803d; margin: 0 0 15px; font-size: 16px; }
-              .credential-row { margin-bottom: 10px; font-size: 14px; color: #374151; }
-              .credential-row strong { display: inline-block; width: 100px; }
-              .warning { background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin: 20px 0; }
-              .warning p { color: #92400e; margin: 0; font-size: 13px; }
-              .button { display: inline-block; background-color: #16a34a; color: white !important; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 15px; margin: 20px 0; }
-              .footer { background: #f9fafb; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb; }
-              .footer p { color: #9ca3af; font-size: 12px; margin: 0; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <div class="header">
-                <h1>🎓 Pateros Catholic School</h1>
-                <p>Document Request System</p>
-              </div>
-              <div class="body">
-                <p>Dear <strong>${studentName}</strong>,</p>
-                <p>Your student account has been successfully created in the <strong>PCS Document Request System</strong>. You can now log in and request your school documents online.</p>
+    console.log('Sending email to:', to);
 
-                <div class="credentials">
-                  <h3>🔐 Your Login Credentials</h3>
-                  <div class="credential-row">
-                    <strong>Email:</strong> ${email}
-                  </div>
-                  <div class="credential-row">
-                    <strong>Password:</strong> ${password}
-                  </div>
-                </div>
+    const client = new SmtpClient();
 
-                <div class="warning">
-                  <p>⚠️ <strong>Important:</strong> Please change your password after your first login to keep your account secure.</p>
-                </div>
-
-                <p>You can access the system using the link below:</p>
-                <a href="https://document-request.vercel.app" class="button">Login to PCS DRS</a>
-
-                <p>If you have any questions, please contact the Registrar's Office.</p>
-                <p>Best regards,<br><strong>PCS Registrar's Office</strong></p>
-              </div>
-              <div class="footer">
-                <p>© 2026 Pateros Catholic School. All rights reserved.</p>
-                <p>Contact the Registrar's Office for assistance.</p>
-              </div>
-            </div>
-          </body>
-          </html>
-        `,
-      }),
+    await client.connectTLS({
+      hostname: 'smtp.gmail.com',
+      port: 465,
+      username: gmailUser,
+      password: gmailPassword,
     });
 
-    const data = await res.json();
+    await client.send({
+      from: `PCS Document Request System <${gmailUser}>`,
+      to: to,
+      subject: 'Your Student Account Has Been Created - PCS Document Request System',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff;">
+          <div style="background-color: #16a34a; padding: 30px; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 22px;">🎓 Pateros Catholic School</h1>
+            <p style="color: #d1fae5; margin: 5px 0 0; font-size: 14px;">Document Request System</p>
+          </div>
+          <div style="padding: 30px;">
+            <p style="color: #374151; font-size: 15px;">Dear <strong>${studentName}</strong>,</p>
+            <p style="color: #374151; font-size: 15px;">Your student account has been successfully created in the <strong>PCS Document Request System</strong>. You can now log in and request your school documents online.</p>
 
-    if (!res.ok) {
-      console.error('Resend error:', data);
-      throw new Error(data.message || 'Failed to send email');
-    }
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 20px; margin: 20px 0;">
+              <h3 style="color: #15803d; margin: 0 0 15px; font-size: 16px;">🔐 Your Login Credentials</h3>
+              <p style="margin: 8px 0; font-size: 14px; color: #374151;">
+                <strong style="display: inline-block; width: 100px;">Email:</strong> ${email}
+              </p>
+              <p style="margin: 8px 0; font-size: 14px; color: #374151;">
+                <strong style="display: inline-block; width: 100px;">Password:</strong> ${password}
+              </p>
+            </div>
+
+            <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin: 20px 0;">
+              <p style="color: #92400e; margin: 0; font-size: 13px;">
+                ⚠️ <strong>Important:</strong> Please change your password after your first login to keep your account secure.
+              </p>
+            </div>
+
+            <p style="color: #374151; font-size: 15px;">You can access the system using the link below:</p>
+            <a href="https://document-request.vercel.app"
+               style="display: inline-block; background-color: #16a34a; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 15px; margin: 10px 0;">
+              Login to PCS DRS
+            </a>
+
+            <p style="color: #374151; font-size: 15px;">If you have any questions, please contact the Registrar's Office.</p>
+            <p style="color: #374151; font-size: 15px;">Best regards,<br><strong>PCS Registrar's Office</strong></p>
+          </div>
+          <div style="background: #f9fafb; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
+            <p style="color: #9ca3af; font-size: 12px; margin: 0;">© 2026 Pateros Catholic School. All rights reserved.</p>
+          </div>
+        </div>
+      `,
+    });
+
+    await client.close();
 
     console.log('Email sent successfully to:', to);
 
     return new Response(
-      JSON.stringify({ success: true, message: `Email sent to ${to}`, id: data.id }),
+      JSON.stringify({ success: true, message: `Email sent to ${to}` }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 

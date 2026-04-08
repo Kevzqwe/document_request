@@ -140,13 +140,19 @@ Deno.serve(async (req) => {
 
     // ✅ Send welcome email via send-gmail function
     try {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL');
+      const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
+
+      console.log('Calling send-gmail for:', email);
+
       const emailRes = await fetch(
-        `${Deno.env.get('SUPABASE_URL')}/functions/v1/send-gmail`,
+        `${supabaseUrl}/functions/v1/send-gmail`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${Deno.env.get('SUPABASE_ANON_KEY')}`,
+            'Authorization': `Bearer ${supabaseAnonKey}`,
+            'apikey': supabaseAnonKey!,
           },
           body: JSON.stringify({
             to: email.toLowerCase(),
@@ -159,9 +165,9 @@ Deno.serve(async (req) => {
 
       const emailData = await emailRes.json();
       if (!emailRes.ok) {
-        console.error('Email sending failed:', emailData);
+        console.error('Email sending failed:', JSON.stringify(emailData));
       } else {
-        console.log('Welcome email sent to:', email);
+        console.log('Welcome email sent successfully to:', email);
       }
     } catch (emailErr: any) {
       // Don't fail student creation if email fails
