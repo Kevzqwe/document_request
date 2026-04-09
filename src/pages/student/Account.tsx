@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { User, Mail, Phone, GraduationCap, Edit2, Save, X, Camera, LogOut, Loader2 } from 'lucide-react';
+import { User, Phone, GraduationCap, Edit2, Save, X, Camera, LogOut, Loader2, Lock } from 'lucide-react';
 import { profileStorage } from '@/lib/profileStorage';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -18,6 +18,8 @@ const Account = () => {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [editedInfo, setEditedInfo] = useState({
     firstName: profile?.firstName || '',
     middleName: profile?.middleName || '',
@@ -25,10 +27,8 @@ const Account = () => {
     contactNumber: profile?.contactNumber || '',
   });
 
-  // Load saved profile data on mount
   useEffect(() => {
     if (user?.id) {
-      // Prefer avatar from database profile
       if (profile?.avatarUrl) {
         setAvatarUrl(profile.avatarUrl);
       } else {
@@ -46,7 +46,6 @@ const Account = () => {
     }
   }, [user?.id, profile]);
 
-  // Get the display avatar URL
   const displayAvatarUrl = profileStorage.getAvatarUrl(avatarUrl, profile?.firstName);
 
   const [stats, setStats] = useState({ total: 0, approved: 0, completed: 0, pending: 0 });
@@ -76,7 +75,6 @@ const Account = () => {
         const newAvatarUrl = await profileStorage.uploadAvatar(user.id, file);
         setAvatarUrl(newAvatarUrl);
 
-        // Save avatar_url to the database
         await supabase
           .from('students')
           .update({ avatar_url: newAvatarUrl })
@@ -93,17 +91,10 @@ const Account = () => {
 
         await refreshProfile();
         window.dispatchEvent(new Event('avatarUpdated'));
-        
-        toast({
-          title: 'Photo Updated',
-          description: 'Your profile photo has been saved.',
-        });
+
+        toast({ title: 'Photo Updated', description: 'Your profile photo has been saved.' });
       } catch (error) {
-        toast({
-          title: 'Upload Failed',
-          description: 'Failed to upload photo. Please try again.',
-          variant: 'destructive',
-        });
+        toast({ title: 'Upload Failed', description: 'Failed to upload photo. Please try again.', variant: 'destructive' });
       } finally {
         setIsUploadingAvatar(false);
       }
@@ -112,10 +103,22 @@ const Account = () => {
 
   const handleSave = async () => {
     if (!user?.id) return;
-    
+
+    // Validate password if provided
+    if (newPassword) {
+      if (newPassword.length < 6) {
+        toast({ title: 'Weak Password', description: 'Password must be at least 6 characters.', variant: 'destructive' });
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        toast({ title: 'Password Mismatch', description: 'Passwords do not match.', variant: 'destructive' });
+        return;
+      }
+    }
+
     setIsSaving(true);
-    
-    // Save to database
+
+    // Update profile in database
     const { error } = await supabase
       .from('students')
       .update({
@@ -127,17 +130,22 @@ const Account = () => {
       .eq('user_id', user.id);
 
     if (error) {
-      console.error('Error updating profile:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to update profile.',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: 'Failed to update profile.', variant: 'destructive' });
       setIsSaving(false);
       return;
     }
-    
-    // Also save to localStorage for avatar/offline
+
+    // ✅ Update password if provided
+    if (newPassword) {
+      const { error: pwError } = await supabase.auth.updateUser({ password: newPassword });
+      if (pwError) {
+        toast({ title: 'Password Error', description: pwError.message, variant: 'destructive' });
+        setIsSaving(false);
+        return;
+      }
+      toast({ title: 'Password Updated', description: 'Your password has been changed successfully.' });
+    }
+
     profileStorage.save({
       userId: user.id,
       avatarUrl: avatarUrl,
@@ -146,29 +154,23 @@ const Account = () => {
       middleName: editedInfo.middleName,
       contactNumber: editedInfo.contactNumber,
     });
-    
-    // Refresh profile in AuthContext so welcome name updates
+
     await refreshProfile();
-    
     window.dispatchEvent(new CustomEvent('profileUpdated'));
-    
-    toast({
-      title: 'Profile Updated',
-      description: 'Your information has been successfully saved.',
-    });
+
+    toast({ title: 'Profile Updated', description: 'Your information has been successfully saved.' });
     setIsEditing(false);
+    setNewPassword('');
+    setConfirmPassword('');
     setIsSaving(false);
   };
 
   const handleLogout = () => {
     setIsLoggingOut(true);
-    setTimeout(() => {
-      logout();
-    }, 500);
+    setTimeout(() => { logout(); }, 500);
   };
 
   const handleCancel = () => {
-    // Restore from localStorage first, then fall back to profile
     if (user?.id) {
       const savedProfile = profileStorage.getByUserId(user.id);
       setEditedInfo({
@@ -185,67 +187,10 @@ const Account = () => {
         contactNumber: profile?.contactNumber || '',
       });
     }
+    setNewPassword('');
+    setConfirmPassword('');
     setIsEditing(false);
   };
-
-  const editableFields = [
-    {
-      label: 'First Name',
-      value: editedInfo.firstName,
-      field: 'firstName',
-      icon: User,
-      editable: true,
-    },
-    {
-      label: 'Middle Name',
-      value: editedInfo.middleName,
-      field: 'middleName',
-      icon: User,
-      editable: true,
-    },
-    {
-      label: 'Last Name',
-      value: editedInfo.lastName,
-      field: 'lastName',
-      icon: User,
-      editable: true,
-    },
-    {
-      label: 'Contact Number',
-      value: editedInfo.contactNumber,
-      field: 'contactNumber',
-      icon: Phone,
-      editable: true,
-    },
-    {
-      label: 'Student ID',
-      value: profile?.studentId || profile?.username,
-      field: 'studentId',
-      icon: Mail,
-      editable: false,
-    },
-    {
-      label: 'Grade Level',
-      value: profile?.gradeLevel,
-      field: 'gradeLevel',
-      icon: GraduationCap,
-      editable: false,
-    },
-    {
-      label: 'Section',
-      value: profile?.section,
-      field: 'section',
-      icon: GraduationCap,
-      editable: false,
-    },
-    {
-      label: 'Role',
-      value: profile?.role,
-      field: 'role',
-      icon: User,
-      editable: false,
-    },
-  ];
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -273,20 +218,15 @@ const Account = () => {
                     )}
                   </button>
                 )}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handlePhotoUpload}
-                  className="hidden"
-                />
+                <input ref={fileInputRef} type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
               </div>
               <div>
                 <CardTitle className="text-2xl">
                   {profile?.firstName} {profile?.middleName ? profile.middleName + ' ' : ''}{profile?.lastName}
                 </CardTitle>
-                <p className="text-muted-foreground">
-                  {profile?.studentId || profile?.username || 'Student'}
+                {/* ✅ Show Student ID under name instead of email */}
+                <p className="text-muted-foreground font-mono">
+                  {profile?.studentId ? `ID: ${profile.studentId}` : 'No Student ID'}
                 </p>
               </div>
             </div>
@@ -299,11 +239,7 @@ const Account = () => {
               ) : (
                 <>
                   <Button onClick={handleSave} variant="default" disabled={isSaving}>
-                    {isSaving ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    ) : (
-                      <Save className="w-4 h-4 mr-2" />
-                    )}
+                    {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                     {isSaving ? 'Saving...' : 'Save'}
                   </Button>
                   <Button onClick={handleCancel} variant="outline" disabled={isSaving}>
@@ -315,44 +251,93 @@ const Account = () => {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="pt-6">
+        <CardContent className="pt-6 space-y-6">
+          {/* Profile Fields */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {editableFields.map((item, index) => (
-              <div key={index} className="space-y-2">
-                <Label className="flex items-center gap-2 text-muted-foreground">
-                  <item.icon className="w-4 h-4" />
-                  {item.label}
-                </Label>
-                <Input
-                  value={item.value}
-                  disabled={!isEditing || !item.editable}
-                  onChange={(e) => {
-                    if (!isEditing || !item.editable) return;
-                    let value = e.target.value;
-                    // Filter input based on field type
-                    if (['firstName', 'middleName', 'lastName'].includes(item.field)) {
-                      value = value.replace(/[^a-zA-Z\s]/g, ''); // Letters and spaces only
-                    } else if (item.field === 'contactNumber') {
-                      value = value.replace(/[^0-9]/g, ''); // Numbers only
-                    }
-                    setEditedInfo({ ...editedInfo, [item.field]: value });
-                  }}
-                  className={
-                    isEditing && item.editable
-                      ? 'border-2 font-medium'
-                      : 'bg-muted border-2 font-medium'
-                  }
-                />
-              </div>
-            ))}
+            {/* Editable fields */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />First Name</Label>
+              <Input value={editedInfo.firstName} disabled={!isEditing}
+                onChange={(e) => setEditedInfo({ ...editedInfo, firstName: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Middle Name</Label>
+              <Input value={editedInfo.middleName} disabled={!isEditing}
+                onChange={(e) => setEditedInfo({ ...editedInfo, middleName: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Last Name</Label>
+              <Input value={editedInfo.lastName} disabled={!isEditing}
+                onChange={(e) => setEditedInfo({ ...editedInfo, lastName: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><Phone className="w-4 h-4" />Contact Number</Label>
+              <Input value={editedInfo.contactNumber} disabled={!isEditing}
+                onChange={(e) => setEditedInfo({ ...editedInfo, contactNumber: e.target.value.replace(/[^0-9]/g, '') })}
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+            </div>
+
+            {/* Read-only fields */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Student ID</Label>
+              <Input value={profile?.studentId || '—'} disabled className="bg-muted border-2 font-medium" />
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><GraduationCap className="w-4 h-4" />Grade Level</Label>
+              <Input value={profile?.gradeLevel || '—'} disabled className="bg-muted border-2 font-medium" />
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><GraduationCap className="w-4 h-4" />Section</Label>
+              <Input value={profile?.section || '—'} disabled className="bg-muted border-2 font-medium" />
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Role</Label>
+              <Input value={profile?.role || '—'} disabled className="bg-muted border-2 font-medium capitalize" />
+            </div>
           </div>
+
+          {/* ✅ Password change section - only shows when editing */}
+          {isEditing && (
+            <div className="border-t pt-6 space-y-4">
+              <h3 className="font-semibold flex items-center gap-2">
+                <Lock className="w-4 h-4" />
+                Change Password <span className="text-sm text-muted-foreground font-normal">(optional)</span>
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>New Password</Label>
+                  <Input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Minimum 6 characters"
+                    className="border-2"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Confirm New Password</Label>
+                  <Input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Re-enter new password"
+                    className={`border-2 ${confirmPassword && newPassword !== confirmPassword ? 'border-destructive' : ''}`}
+                  />
+                  {confirmPassword && newPassword !== confirmPassword && (
+                    <p className="text-xs text-destructive">Passwords do not match</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
       <Card className="border-2">
-        <CardHeader>
-          <CardTitle>Account Statistics</CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle>Account Statistics</CardTitle></CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <div className="p-4 bg-primary/10 rounded-lg border-2 border-primary/30">
@@ -380,8 +365,7 @@ const Account = () => {
           <div className="p-4 bg-muted rounded-lg">
             <h3 className="font-semibold mb-2">Need to update your information?</h3>
             <p className="text-sm text-muted-foreground">
-              Contact the Registrar's Office to update your personal information or if
-              you notice any errors in your profile.
+              Contact the Registrar's Office to update your personal information or if you notice any errors in your profile.
             </p>
           </div>
         </CardContent>
@@ -389,11 +373,7 @@ const Account = () => {
 
       <div className="mt-5">
         <Button onClick={handleLogout} variant="destructive" className="w-full h-12" disabled={isLoggingOut}>
-          {isLoggingOut ? (
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-          ) : (
-            <LogOut className="w-4 h-4 mr-2" />
-          )}
+          {isLoggingOut ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LogOut className="w-4 h-4 mr-2" />}
           {isLoggingOut ? 'Logging out...' : 'Logout'}
         </Button>
       </div>
