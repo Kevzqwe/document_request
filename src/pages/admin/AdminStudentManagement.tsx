@@ -58,28 +58,22 @@ const emptyForm: StudentFormData = {
   password: '',
 };
 
-// ✅ Helper: invoke edge function using direct fetch with a force-refreshed token
 const invokeWithAuth = async (fnName: string, body: object) => {
-  // ✅ Always force-refresh to guarantee a valid token on any device
   const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
 
   let token = refreshed?.session?.access_token;
 
-  // If refresh fails, fall back to existing session
   if (refreshError || !token) {
     const { data: { session: existing } } = await supabase.auth.getSession();
     token = existing?.access_token;
   }
 
-  // If still no token, user is not logged in — redirect to login
   if (!token) {
     await supabase.auth.signOut();
     window.location.href = '/';
     return { data: null, error: new Error('Session expired. Please log in again.') };
   }
 
-  // ✅ Use direct fetch instead of supabase.functions.invoke
-  // This guarantees the Authorization header is sent correctly
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -170,7 +164,6 @@ const AdminStudentManagement = () => {
     return null;
   };
 
-  // ── Add new student ──
   const handleAddStudent = async () => {
     if (!formData.username || !formData.first_name || !formData.last_name || !formData.password) {
       toast({ title: 'Missing fields', description: 'Email, first name, last name, and password are required.', variant: 'destructive' });
@@ -191,7 +184,6 @@ const AdminStudentManagement = () => {
 
     setSaving(true);
 
-    // ✅ Use invokeWithAuth instead of supabase.functions.invoke directly
     const { error } = await invokeWithAuth('create-student', {
       email: formData.username,
       password: formData.password,
@@ -221,7 +213,6 @@ const AdminStudentManagement = () => {
     setSaving(false);
   };
 
-  // ── Edit existing student ──
   const handleEditStudent = async () => {
     if (!editingStudent) return;
     setSaving(true);
@@ -251,22 +242,39 @@ const AdminStudentManagement = () => {
     setSaving(false);
   };
 
-  // ── Delete student ──
+  // ✅ Fixed: Delete student profile AND auth user
   const handleDeleteStudent = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
 
-    const { error } = await supabase
-      .from('students')
-      .delete()
-      .eq('id', deleteTarget.id);
+    try {
+      // Step 1: Delete auth user via edge function (this also cascades to students table)
+      const { error: authError } = await invokeWithAuth('delete-student', {
+        user_id: deleteTarget.user_id,
+      });
 
-    if (error) {
-      toast({ title: 'Error', description: error.message || 'Failed to delete student.', variant: 'destructive' });
-    } else {
-      toast({ title: 'Deleted', description: `${deleteTarget.first_name} ${deleteTarget.last_name} removed.` });
+      if (authError) {
+        // If auth deletion fails, try deleting from students table directly
+        console.error('Auth deletion failed, trying direct delete:', authError.message);
+        const { error: dbError } = await supabase
+          .from('students')
+          .delete()
+          .eq('id', deleteTarget.id);
+
+        if (dbError) {
+          toast({ title: 'Error', description: dbError.message || 'Failed to delete student.', variant: 'destructive' });
+          setDeleting(false);
+          setDeleteTarget(null);
+          return;
+        }
+      }
+
+      toast({ title: 'Deleted', description: `${deleteTarget.first_name} ${deleteTarget.last_name} has been removed.` });
       await fetchStudents();
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message || 'Failed to delete student.', variant: 'destructive' });
     }
+
     setDeleteTarget(null);
     setDeleting(false);
   };
@@ -391,7 +399,6 @@ const AdminStudentManagement = () => {
         continue;
       }
 
-      // ✅ Use invokeWithAuth for import too
       const { error } = await invokeWithAuth('create-student', {
         email: row.username,
         password: row.password || 'changeme123',
@@ -423,7 +430,6 @@ const AdminStudentManagement = () => {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Users className="w-7 h-7 text-primary" />
@@ -442,7 +448,6 @@ const AdminStudentManagement = () => {
         </div>
       </div>
 
-      {/* Search */}
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
@@ -453,7 +458,6 @@ const AdminStudentManagement = () => {
         />
       </div>
 
-      {/* Table */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="border-b bg-muted/30">
           <CardTitle className="text-lg">Students ({filtered.length})</CardTitle>
@@ -511,12 +515,10 @@ const AdminStudentManagement = () => {
         </CardContent>
       </Card>
 
-      {/* Add/Edit Dialog */}
       <Dialog open={formOpen} onOpenChange={(open) => { if (!open) { setFormOpen(false); setEditingStudent(null); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingStudent ? 'Edit Student' : 'Add New Student'}</DialogTitle>
-            {/* ✅ fixes the aria-describedby warning */}
             <DialogDescription>
               {editingStudent ? 'Update the student profile information below.' : 'Fill in the details to create a new student account.'}
             </DialogDescription>
@@ -575,26 +577,25 @@ const AdminStudentManagement = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation */}
+      {/* ✅ Updated delete dialog */}
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Student</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete {deleteTarget?.first_name} {deleteTarget?.last_name}? This will remove their profile data.
+              Are you sure you want to delete <strong>{deleteTarget?.first_name} {deleteTarget?.last_name}</strong>? This will permanently remove their profile and login account.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteStudent} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Delete
+              {deleting ? 'Deleting...' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Invalid Format Modal */}
       <AlertDialog open={invalidFormatOpen} onOpenChange={setInvalidFormatOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -612,7 +613,6 @@ const AdminStudentManagement = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Duplicate Student Alert */}
       <AlertDialog open={duplicateAlertOpen} onOpenChange={setDuplicateAlertOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -630,7 +630,6 @@ const AdminStudentManagement = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Import Preview Dialog */}
       <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!open && !importing) { setImportDialogOpen(false); setImportPreview([]); setImportDuplicates([]); } }}>
         <DialogContent className="max-w-3xl max-h-[80vh]">
           <DialogHeader>
@@ -638,7 +637,6 @@ const AdminStudentManagement = () => {
               <FileSpreadsheet className="w-5 h-5" />
               Import Preview — {importPreview.length} students
             </DialogTitle>
-            {/* ✅ fixes the aria-describedby warning for this dialog too */}
             <DialogDescription>
               Review the students below before confirming the import.
             </DialogDescription>
