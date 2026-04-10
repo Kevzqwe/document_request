@@ -590,7 +590,7 @@ const AdminStudentManagement = () => {
               Import Preview — {importPreview.length} students
             </DialogTitle>
             <DialogDescription>
-              Review the students below. Student IDs will be auto-generated on import.
+              Review the students below.
             </DialogDescription>
           </DialogHeader>
 
