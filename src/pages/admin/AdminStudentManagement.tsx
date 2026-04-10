@@ -518,13 +518,7 @@ const AdminStudentManagement = () => {
               <Input value={formData.contact_number} onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })} />
             </div>
             {/* ✅ Student ID auto-generated notice */}
-            {!editingStudent && (
-              <div className="col-span-2 p-3 bg-primary/10 border border-primary/20 rounded-lg">
-                <p className="text-sm text-primary font-medium">
-                  🎓 Student ID will be automatically generated (e.g. STU-001)
-                </p>
-              </div>
-            )}
+            
           </div>
           <DialogFooter>
             <DialogClose asChild>
