@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
+import { Badge } from '@/components/ui/badge';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
@@ -16,7 +17,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import {
-  Search, Upload, Plus, Edit2, Trash2, Loader2, Users, FileSpreadsheet, AlertTriangle, CheckCircle2,
+  Search, Upload, Plus, Edit2, Loader2, Users, FileSpreadsheet,
+  AlertTriangle, CheckCircle2, Archive, ArchiveRestore, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -31,6 +33,8 @@ interface StudentRow {
   grade_level: string | null;
   section: string | null;
   student_id: string | null;
+  is_archived: boolean | null;
+  archived_at: string | null;
   created_at: string;
 }
 
@@ -100,8 +104,9 @@ const AdminStudentManagement = () => {
   const [editingStudent, setEditingStudent] = useState<StudentRow | null>(null);
   const [formData, setFormData] = useState<StudentFormData>(emptyForm);
   const [saving, setSaving] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<StudentRow | null>(null);
-  const [deleting, setDeleting] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<StudentRow | null>(null);
+  const [archiving, setArchiving] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importPreview, setImportPreview] = useState<StudentFormData[]>([]);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -115,7 +120,7 @@ const AdminStudentManagement = () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('students')
-      .select('id, user_id, username, first_name, last_name, middle_name, contact_number, grade_level, section, student_id, created_at')
+      .select('id, user_id, username, first_name, last_name, middle_name, contact_number, grade_level, section, student_id, is_archived, archived_at, created_at')
       .order('created_at', { ascending: false });
     if (error) {
       toast({ title: 'Error', description: 'Failed to load students.', variant: 'destructive' });
@@ -127,7 +132,10 @@ const AdminStudentManagement = () => {
 
   useEffect(() => { fetchStudents(); }, []);
 
-  const filtered = students.filter((s) => {
+  const activeStudents = students.filter(s => !s.is_archived);
+  const archivedStudents = students.filter(s => s.is_archived);
+
+  const filtered = activeStudents.filter((s) => {
     const q = search.toLowerCase();
     return (
       s.first_name.toLowerCase().includes(q) ||
@@ -139,8 +147,18 @@ const AdminStudentManagement = () => {
     );
   });
 
+  const filteredArchived = archivedStudents.filter((s) => {
+    const q = search.toLowerCase();
+    return (
+      s.first_name.toLowerCase().includes(q) ||
+      s.last_name.toLowerCase().includes(q) ||
+      s.username.toLowerCase().includes(q) ||
+      (s.student_id || '').toLowerCase().includes(q)
+    );
+  });
+
   const checkDuplicate = (email: string): string | null => {
-    const existingByEmail = students.find(s => s.username.toLowerCase() === email.toLowerCase());
+    const existingByEmail = activeStudents.find(s => s.username.toLowerCase() === email.toLowerCase());
     if (existingByEmail) {
       return `A student with email "${email}" already exists (${existingByEmail.first_name} ${existingByEmail.last_name}).`;
     }
@@ -216,33 +234,30 @@ const AdminStudentManagement = () => {
     setSaving(false);
   };
 
-  const handleDeleteStudent = async () => {
-    if (!deleteTarget) return;
-    setDeleting(true);
+  // ✅ Archive / Unarchive student
+  const handleArchiveStudent = async (action: 'archive' | 'unarchive') => {
+    if (!archiveTarget) return;
+    setArchiving(true);
     try {
-      const { error: authError } = await invokeWithAuth('delete-student', {
-        user_id: deleteTarget.user_id,
+      const { error } = await invokeWithAuth('archive-account', {
+        user_id: archiveTarget.user_id,
+        account_type: 'student',
+        action,
       });
-      if (authError) {
-        console.error('Auth deletion failed, trying direct delete:', authError.message);
-        const { error: dbError } = await supabase
-          .from('students')
-          .delete()
-          .eq('id', deleteTarget.id);
-        if (dbError) {
-          toast({ title: 'Error', description: dbError.message || 'Failed to delete student.', variant: 'destructive' });
-          setDeleting(false);
-          setDeleteTarget(null);
-          return;
-        }
+      if (error) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      } else {
+        toast({
+          title: action === 'archive' ? 'Archived' : 'Restored',
+          description: `${archiveTarget.first_name} ${archiveTarget.last_name} has been ${action === 'archive' ? 'archived' : 'restored'}.`,
+        });
+        await fetchStudents();
       }
-      toast({ title: 'Deleted', description: `${deleteTarget.first_name} ${deleteTarget.last_name} has been removed.` });
-      await fetchStudents();
     } catch (err: any) {
-      toast({ title: 'Error', description: err.message || 'Failed to delete student.', variant: 'destructive' });
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
     }
-    setDeleteTarget(null);
-    setDeleting(false);
+    setArchiveTarget(null);
+    setArchiving(false);
   };
 
   const openEdit = (s: StudentRow) => {
@@ -379,6 +394,62 @@ const AdminStudentManagement = () => {
     setImporting(false);
   };
 
+  const StudentTable = ({ data, isArchived = false }: { data: StudentRow[], isArchived?: boolean }) => (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Student ID</TableHead>
+            <TableHead>Name</TableHead>
+            <TableHead>Email</TableHead>
+            <TableHead>Grade & Section</TableHead>
+            <TableHead>Contact</TableHead>
+            {isArchived && <TableHead>Archived On</TableHead>}
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.map((s) => (
+            <TableRow key={s.id} className={isArchived ? 'opacity-60' : ''}>
+              <TableCell className="font-mono text-sm font-semibold text-primary">{s.student_id || '—'}</TableCell>
+              <TableCell className="font-medium">
+                {s.first_name} {s.middle_name ? s.middle_name + ' ' : ''}{s.last_name}
+              </TableCell>
+              <TableCell className="text-sm text-muted-foreground">{s.username}</TableCell>
+              <TableCell className="text-sm">
+                {s.grade_level || '—'} {s.section ? `/ ${s.section}` : ''}
+              </TableCell>
+              <TableCell className="text-sm">{s.contact_number || '—'}</TableCell>
+              {isArchived && (
+                <TableCell className="text-sm text-muted-foreground">
+                  {s.archived_at ? new Date(s.archived_at).toLocaleDateString() : '—'}
+                </TableCell>
+              )}
+              <TableCell className="text-right">
+                <div className="flex justify-end gap-1">
+                  {!isArchived && (
+                    <Button variant="ghost" size="icon" onClick={() => openEdit(s)}>
+                      <Edit2 className="w-4 h-4" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={isArchived ? 'text-green-600 hover:text-green-700' : 'text-amber-500 hover:text-amber-600'}
+                    onClick={() => setArchiveTarget({ ...s, is_archived: isArchived })}
+                    title={isArchived ? 'Restore' : 'Archive'}
+                  >
+                    {isArchived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
+                  </Button>
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -409,6 +480,7 @@ const AdminStudentManagement = () => {
         />
       </div>
 
+      {/* Active Students */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="border-b bg-muted/30">
           <CardTitle className="text-lg">Students ({filtered.length})</CardTitle>
@@ -423,49 +495,45 @@ const AdminStudentManagement = () => {
               {search ? 'No students match your search.' : 'No students found.'}
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Student ID</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Grade & Section</TableHead>
-                    <TableHead>Contact</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell className="font-mono text-sm font-semibold text-primary">{s.student_id || '—'}</TableCell>
-                      <TableCell className="font-medium">
-                        {s.first_name} {s.middle_name ? s.middle_name + ' ' : ''}{s.last_name}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{s.username}</TableCell>
-                      <TableCell className="text-sm">
-                        {s.grade_level || '—'} {s.section ? `/ ${s.section}` : ''}
-                      </TableCell>
-                      <TableCell className="text-sm">{s.contact_number || '—'}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(s)}>
-                            <Edit2 className="w-4 h-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive" onClick={() => setDeleteTarget(s)}>
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <StudentTable data={filtered} />
           )}
         </CardContent>
       </Card>
 
+      {/* Archived Students */}
+      <Card className="border-2 shadow-lg">
+        <CardHeader
+          className="cursor-pointer bg-muted/30"
+          onClick={() => setShowArchived(!showArchived)}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-muted rounded-lg flex items-center justify-center">
+                <Archive className="w-5 h-5 text-muted-foreground" />
+              </div>
+              <div>
+                <CardTitle className="text-lg">Archived Students</CardTitle>
+                <p className="text-sm text-muted-foreground">Archived accounts are hidden from active lists</p>
+              </div>
+              <Badge variant="secondary">{archivedStudents.length}</Badge>
+            </div>
+            <Button variant="ghost" size="sm">
+              {showArchived ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </Button>
+          </div>
+        </CardHeader>
+        {showArchived && (
+          <CardContent className="p-0">
+            {filteredArchived.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">No archived students.</div>
+            ) : (
+              <StudentTable data={filteredArchived} isArchived />
+            )}
+          </CardContent>
+        )}
+      </Card>
+
+      {/* Add/Edit Dialog */}
       <Dialog open={formOpen} onOpenChange={(open) => { if (!open) { setFormOpen(false); setEditingStudent(null); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -524,19 +592,29 @@ const AdminStudentManagement = () => {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+      {/* Archive Confirmation */}
+      <AlertDialog open={!!archiveTarget} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Student</AlertDialogTitle>
+            <AlertDialogTitle>
+              {archiveTarget?.is_archived ? 'Restore Student' : 'Archive Student'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete <strong>{deleteTarget?.first_name} {deleteTarget?.last_name}</strong>? This will permanently remove their profile and login account.
+              {archiveTarget?.is_archived
+                ? `Are you sure you want to restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active students list again.`
+                : `Are you sure you want to archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from the active students list but their data will be kept.`
+              }
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteStudent} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              {deleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {deleting ? 'Deleting...' : 'Delete'}
+            <AlertDialogAction
+              onClick={() => handleArchiveStudent(archiveTarget?.is_archived ? 'unarchive' : 'archive')}
+              disabled={archiving}
+              className={archiveTarget?.is_archived ? 'bg-green-600 hover:bg-green-700' : 'bg-amber-500 hover:bg-amber-600'}
+            >
+              {archiving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {archiveTarget?.is_archived ? 'Restore' : 'Archive'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
