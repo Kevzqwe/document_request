@@ -92,7 +92,6 @@ Deno.serve(async (req) => {
     const contact_number = toStr(body.contact_number);
     const grade_level    = toStr(body.grade_level);
     const section        = toStr(body.section);
-    const student_id     = toStr(body.student_id);
 
     if (!email)      return new Response(JSON.stringify({ error: 'email is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     if (!password)   return new Response(JSON.stringify({ error: 'password is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -123,18 +122,20 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (student_id && newUser.user) {
-      const { error: updateError } = await supabaseAdmin
+    // ✅ Get the auto-generated student_id after creation
+    let studentId = '';
+    if (newUser.user) {
+      // Wait briefly for trigger to fire
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const { data: studentData } = await supabaseAdmin
         .from('students')
-        .update({ student_id })
-        .eq('user_id', newUser.user.id);
-
-      if (updateError) {
-        console.error('student_id update error:', updateError.message);
-      }
+        .select('student_id')
+        .eq('user_id', newUser.user.id)
+        .single();
+      studentId = studentData?.student_id || '';
     }
 
-    // ✅ Send welcome email using SERVICE_ROLE_KEY
+    // ✅ Send welcome email with full student details
     try {
       console.log('Calling send-gmail for:', email);
 
@@ -152,6 +153,9 @@ Deno.serve(async (req) => {
             studentName: `${first_name} ${last_name}`,
             email: email.toLowerCase(),
             password: password,
+            studentId: studentId,
+            gradeLevel: grade_level,
+            section: section,
           }),
         }
       );
