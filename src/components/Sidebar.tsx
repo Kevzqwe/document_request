@@ -1,4 +1,4 @@
-import { Home, FileText, History, User, LogOut, MessageSquare, BarChart3, ChevronRight, ChevronLeft, CreditCard, Users } from 'lucide-react';
+import { Home, FileText, History, User, LogOut, MessageSquare, BarChart3, ChevronRight, ChevronLeft, CreditCard, Users, ShieldCheck } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -26,6 +26,7 @@ const Sidebar = () => {
     { to: '/admin/messages', icon: MessageSquare, label: 'Messages' },
     { to: '/admin/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/admin/students', icon: Users, label: 'Students' },
+    { to: '/admin/admins', icon: ShieldCheck, label: 'Admin Management' }, // ✅ ADDED
     { to: '/admin/account', icon: User, label: 'Account' },
   ];
 
