@@ -19,6 +19,17 @@ function toStr(val: any): string {
   return String(val).trim();
 }
 
+// ✅ Auto-generate password: LastName + last 4 digits of phone
+// Example: Sadural + 6419 = Sadural6419
+function generatePassword(lastName: string, contactNumber: string): string {
+  const cleanedPhone = contactNumber.replace(/\D/g, '');
+  const last4 = cleanedPhone.length >= 4
+    ? cleanedPhone.slice(-4)
+    : cleanedPhone.padStart(4, '0');
+  const cleanedLastName = lastName.trim().replace(/\s+/g, '');
+  return `${cleanedLastName}${last4}`;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -29,7 +40,6 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
     const authHeader = req.headers.get('Authorization');
@@ -41,7 +51,6 @@ Deno.serve(async (req) => {
     }
 
     const token = authHeader.replace('Bearer ', '').trim();
-
     const isJWT = token.split('.').length === 3;
     if (!isJWT) {
       return new Response(JSON.stringify({ error: 'Unauthorized: invalid token format.' }), {
@@ -85,7 +94,6 @@ Deno.serve(async (req) => {
     }
 
     const email          = toStr(body.email);
-    const password       = toStr(body.password);
     const first_name     = toStr(body.first_name);
     const last_name      = toStr(body.last_name);
     const middle_name    = toStr(body.middle_name);
@@ -94,9 +102,13 @@ Deno.serve(async (req) => {
     const section        = toStr(body.section);
 
     if (!email)      return new Response(JSON.stringify({ error: 'email is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!password)   return new Response(JSON.stringify({ error: 'password is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     if (!first_name) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     if (!last_name)  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!contact_number) return new Response(JSON.stringify({ error: 'contact_number is required for password generation' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+    // ✅ Auto-generate password
+    const password = generatePassword(last_name, contact_number);
+    console.log('Auto-generated password for:', email, '→', password);
 
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
       email: email.toLowerCase(),
@@ -125,7 +137,6 @@ Deno.serve(async (req) => {
     // ✅ Get the auto-generated student_id after creation
     let studentId = '';
     if (newUser.user) {
-      // Wait briefly for trigger to fire
       await new Promise(resolve => setTimeout(resolve, 500));
       const { data: studentData } = await supabaseAdmin
         .from('students')
@@ -135,10 +146,9 @@ Deno.serve(async (req) => {
       studentId = studentData?.student_id || '';
     }
 
-    // ✅ Send welcome email with full student details
+    // ✅ Send welcome email with auto-generated password
     try {
       console.log('Calling send-gmail for:', email);
-
       const emailRes = await fetch(
         `${supabaseUrl}/functions/v1/send-gmail`,
         {
@@ -159,7 +169,6 @@ Deno.serve(async (req) => {
           }),
         }
       );
-
       const emailData = await emailRes.json();
       if (!emailRes.ok) {
         console.error('Email sending failed:', JSON.stringify(emailData));

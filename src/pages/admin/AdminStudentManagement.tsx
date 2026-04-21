@@ -46,7 +46,6 @@ interface StudentFormData {
   contact_number: string;
   grade_level: string;
   section: string;
-  password: string;
 }
 
 const emptyForm: StudentFormData = {
@@ -57,7 +56,6 @@ const emptyForm: StudentFormData = {
   contact_number: '',
   grade_level: '',
   section: '',
-  password: '',
 };
 
 const invokeWithAuth = async (fnName: string, body: object) => {
@@ -166,12 +164,12 @@ const AdminStudentManagement = () => {
   };
 
   const handleAddStudent = async () => {
-    if (!formData.username || !formData.first_name || !formData.last_name || !formData.password) {
-      toast({ title: 'Missing fields', description: 'Email, first name, last name, and password are required.', variant: 'destructive' });
+    if (!formData.username || !formData.first_name || !formData.last_name) {
+      toast({ title: 'Missing fields', description: 'Email, first name, and last name are required.', variant: 'destructive' });
       return;
     }
-    if (formData.password.length < 6) {
-      toast({ title: 'Weak password', description: 'Password must be at least 6 characters.', variant: 'destructive' });
+    if (!formData.contact_number || formData.contact_number.length < 10) {
+      toast({ title: 'Missing contact number', description: 'Contact number is required to generate the password.', variant: 'destructive' });
       return;
     }
     const dupMessage = checkDuplicate(formData.username);
@@ -183,11 +181,10 @@ const AdminStudentManagement = () => {
     setSaving(true);
     const { error } = await invokeWithAuth('create-student', {
       email: formData.username,
-      password: formData.password,
       first_name: formData.first_name,
       last_name: formData.last_name,
       middle_name: formData.middle_name || null,
-      contact_number: formData.contact_number || null,
+      contact_number: formData.contact_number,
       grade_level: formData.grade_level || null,
       section: formData.section || null,
     });
@@ -200,7 +197,7 @@ const AdminStudentManagement = () => {
         toast({ title: 'Error', description: errMsg, variant: 'destructive' });
       }
     } else {
-      toast({ title: 'Student Created', description: `${formData.first_name} ${formData.last_name} has been added.` });
+      toast({ title: 'Student Created', description: `${formData.first_name} ${formData.last_name} has been added. Password sent via email.` });
       setFormOpen(false);
       setFormData(emptyForm);
       await fetchStudents();
@@ -234,7 +231,6 @@ const AdminStudentManagement = () => {
     setSaving(false);
   };
 
-  // ✅ Archive / Unarchive student
   const handleArchiveStudent = async (action: 'archive' | 'unarchive') => {
     if (!archiveTarget) return;
     setArchiving(true);
@@ -270,7 +266,6 @@ const AdminStudentManagement = () => {
       contact_number: s.contact_number || '',
       grade_level: s.grade_level || '',
       section: s.section || '',
-      password: '',
     });
     setFormOpen(true);
   };
@@ -285,6 +280,7 @@ const AdminStudentManagement = () => {
     email: ['email', 'Email', 'username', 'Username'],
     first_name: ['first_name', 'First Name', 'FirstName'],
     last_name: ['last_name', 'Last Name', 'LastName'],
+    contact_number: ['contact_number', 'Contact Number', 'ContactNumber', 'Phone', 'phone'],
   };
 
   const validateExcelHeaders = (headers: string[]): { valid: boolean; missing: string[] } => {
@@ -315,7 +311,7 @@ const AdminStudentManagement = () => {
         const { valid, missing } = validateExcelHeaders(headers);
         if (!valid) {
           setInvalidFormatMessage(
-            `Invalid Excel format. The following required columns are missing:\n• ${missing.join('\n• ')}\n\nRequired columns: Email, First Name, Last Name\nOptional columns: Middle Name, Grade Level, Section, Contact Number, Password`
+            `Invalid Excel format. The following required columns are missing:\n• ${missing.join('\n• ')}\n\nRequired columns: Email, First Name, Last Name, Contact Number\nOptional columns: Middle Name, Grade Level, Section`
           );
           setInvalidFormatOpen(true);
           return;
@@ -325,10 +321,9 @@ const AdminStudentManagement = () => {
           first_name: r['first_name'] || r['First Name'] || r['FirstName'] || '',
           last_name: r['last_name'] || r['Last Name'] || r['LastName'] || '',
           middle_name: r['middle_name'] || r['Middle Name'] || r['MiddleName'] || '',
-          contact_number: r['contact_number'] || r['Contact Number'] || r['ContactNumber'] || r['Phone'] || '',
+          contact_number: String(r['contact_number'] || r['Contact Number'] || r['ContactNumber'] || r['Phone'] || r['phone'] || ''),
           grade_level: r['grade_level'] || r['Grade Level'] || r['GradeLevel'] || r['Grade'] || '',
           section: r['section'] || r['Section'] || '',
-          password: r['password'] || r['Password'] || 'changeme123',
         }));
         const duplicates: string[] = [];
         const uniqueRows: StudentFormData[] = [];
@@ -365,17 +360,16 @@ const AdminStudentManagement = () => {
     let success = 0;
     let failed = 0;
     for (const row of importPreview) {
-      if (!row.username || !row.first_name || !row.last_name) {
+      if (!row.username || !row.first_name || !row.last_name || !row.contact_number) {
         failed++;
         continue;
       }
       const { error } = await invokeWithAuth('create-student', {
         email: row.username,
-        password: row.password || 'changeme123',
         first_name: row.first_name,
         last_name: row.last_name,
         middle_name: row.middle_name || null,
-        contact_number: row.contact_number || null,
+        contact_number: row.contact_number,
         grade_level: row.grade_level || null,
         section: row.section || null,
       });
@@ -384,7 +378,7 @@ const AdminStudentManagement = () => {
     }
     toast({
       title: 'Import Complete',
-      description: `${success} students imported successfully${failed > 0 ? `, ${failed} failed` : ''}.`,
+      description: `${success} students imported. Passwords auto-generated and sent via email${failed > 0 ? `, ${failed} failed` : ''}.`,
       variant: failed > 0 && success === 0 ? 'destructive' : 'default',
     });
     setImportDialogOpen(false);
@@ -502,10 +496,7 @@ const AdminStudentManagement = () => {
 
       {/* Archived Students */}
       <Card className="border-2 shadow-lg">
-        <CardHeader
-          className="cursor-pointer bg-muted/30"
-          onClick={() => setShowArchived(!showArchived)}
-        >
+        <CardHeader className="cursor-pointer bg-muted/30" onClick={() => setShowArchived(!showArchived)}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-muted rounded-lg flex items-center justify-center">
@@ -539,21 +530,17 @@ const AdminStudentManagement = () => {
           <DialogHeader>
             <DialogTitle>{editingStudent ? 'Edit Student' : 'Add New Student'}</DialogTitle>
             <DialogDescription>
-              {editingStudent ? 'Update the student profile information below.' : 'Fill in the details to create a new student account.'}
+              {editingStudent
+                ? 'Update the student profile information below.'
+                : 'Fill in the details. Password will be auto-generated from last name + last 4 digits of contact number.'}
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-4">
             {!editingStudent && (
-              <>
-                <div className="col-span-2 space-y-2">
-                  <Label>Email *</Label>
-                  <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="student@email.com" />
-                </div>
-                <div className="col-span-2 space-y-2">
-                  <Label>Password *</Label>
-                  <Input type="password" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="Minimum 6 characters" />
-                </div>
-              </>
+              <div className="col-span-2 space-y-2">
+                <Label>Email *</Label>
+                <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="student@email.com" />
+              </div>
             )}
             <div className="space-y-2">
               <Label>First Name *</Label>
@@ -568,6 +555,14 @@ const AdminStudentManagement = () => {
               <Input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
             </div>
             <div className="space-y-2">
+              <Label>Contact Number *</Label>
+              <Input
+                value={formData.contact_number}
+                onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })}
+                placeholder="Required for password"
+              />
+            </div>
+            <div className="space-y-2">
               <Label>Grade Level</Label>
               <Input value={formData.grade_level} onChange={(e) => setFormData({ ...formData, grade_level: e.target.value })} />
             </div>
@@ -575,10 +570,11 @@ const AdminStudentManagement = () => {
               <Label>Section</Label>
               <Input value={formData.section} onChange={(e) => setFormData({ ...formData, section: e.target.value })} />
             </div>
-            <div className="col-span-2 space-y-2">
-              <Label>Contact Number</Label>
-              <Input value={formData.contact_number} onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })} />
-            </div>
+            {!editingStudent && formData.last_name && formData.contact_number.length >= 4 && (
+              <div className="col-span-2 p-3 bg-muted rounded-lg text-sm text-muted-foreground">
+                🔑 Auto password: <strong className="text-foreground">{formData.last_name.replace(/\s+/g, '')}{formData.contact_number.slice(-4)}</strong>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <DialogClose asChild>
@@ -601,8 +597,8 @@ const AdminStudentManagement = () => {
             </AlertDialogTitle>
             <AlertDialogDescription>
               {archiveTarget?.is_archived
-                ? `Are you sure you want to restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active students list again.`
-                : `Are you sure you want to archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from the active students list but their data will be kept.`
+                ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active students list again.`
+                : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from the active list but data will be kept.`
               }
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -660,7 +656,7 @@ const AdminStudentManagement = () => {
               Import Preview — {importPreview.length} students
             </DialogTitle>
             <DialogDescription>
-              Review the students below before confirming the import.
+              Passwords will be auto-generated: Last Name + last 4 digits of contact number.
             </DialogDescription>
           </DialogHeader>
 
@@ -689,16 +685,18 @@ const AdminStudentManagement = () => {
                       <TableHead>#</TableHead>
                       <TableHead>Email</TableHead>
                       <TableHead>Name</TableHead>
+                      <TableHead>Contact</TableHead>
                       <TableHead>Grade</TableHead>
                       <TableHead>Section</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {importPreview.map((r, i) => (
-                      <TableRow key={i} className={!r.username || !r.first_name || !r.last_name ? 'bg-destructive/10' : ''}>
+                      <TableRow key={i} className={!r.username || !r.first_name || !r.last_name || !r.contact_number ? 'bg-destructive/10' : ''}>
                         <TableCell>{i + 1}</TableCell>
                         <TableCell className="text-sm">{r.username || <span className="text-destructive">Missing</span>}</TableCell>
                         <TableCell className="text-sm">{r.first_name} {r.last_name}</TableCell>
+                        <TableCell className="text-sm">{r.contact_number || <span className="text-destructive">Missing</span>}</TableCell>
                         <TableCell className="text-sm">{r.grade_level || '—'}</TableCell>
                         <TableCell className="text-sm">{r.section || '—'}</TableCell>
                       </TableRow>
@@ -708,7 +706,6 @@ const AdminStudentManagement = () => {
               </div>
               <p className="text-sm text-muted-foreground">
                 Rows highlighted in red are missing required fields and will be skipped.
-                Default password: <code className="bg-muted px-1 rounded">changeme123</code>
               </p>
             </>
           ) : (
