@@ -52,20 +52,20 @@ const emptyForm: AdminFormData = {
   password: '',
 };
 
+// ✅ Fixed: use getSession() instead of refreshSession() to avoid hanging
 const invokeWithAuth = async (fnName: string, body: object) => {
-  const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-  let token = refreshed?.session?.access_token;
-  if (refreshError || !token) {
-    const { data: { session: existing } } = await supabase.auth.getSession();
-    token = existing?.access_token;
-  }
-  if (!token) {
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  const token = session?.access_token;
+
+  if (sessionError || !token) {
     await supabase.auth.signOut();
     window.location.href = '/';
     return { data: null, error: new Error('Session expired.') };
   }
+
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
       method: 'POST',
@@ -76,10 +76,13 @@ const invokeWithAuth = async (fnName: string, body: object) => {
       },
       body: JSON.stringify(body),
     });
+
     const data = await response.json();
+
     if (!response.ok) {
       return { data: null, error: new Error(data?.error || `Request failed with status ${response.status}`) };
     }
+
     return { data, error: null };
   } catch (err: any) {
     return { data: null, error: new Error(err.message || 'Network error') };
@@ -160,53 +163,60 @@ const AdminManagement = () => {
       return;
     }
     setSaving(true);
-    const { error } = await invokeWithAuth('create-admin', {
-      email: formData.username,
-      password: formData.password,
-      first_name: formData.first_name,
-      last_name: formData.last_name,
-      middle_name: formData.middle_name || null,
-      contact_number: formData.contact_number || null,
-    });
-    if (error) {
-      const errMsg = error.message || 'Failed to create admin.';
-      if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('exists')) {
-        setDuplicateAlertMessage(`This admin already exists. ${errMsg}`);
-        setDuplicateAlertOpen(true);
+    try {
+      const { error } = await invokeWithAuth('create-admin', {
+        email: formData.username,
+        password: formData.password,
+        first_name: formData.first_name,
+        last_name: formData.last_name,
+        middle_name: formData.middle_name || null,
+        contact_number: formData.contact_number || null,
+      });
+      if (error) {
+        const errMsg = error.message || 'Failed to create admin.';
+        if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('exists')) {
+          setDuplicateAlertMessage(`This admin already exists. ${errMsg}`);
+          setDuplicateAlertOpen(true);
+        } else {
+          toast({ title: 'Error', description: errMsg, variant: 'destructive' });
+        }
       } else {
-        toast({ title: 'Error', description: errMsg, variant: 'destructive' });
+        toast({ title: 'Admin Created', description: `${formData.first_name} ${formData.last_name} has been added as admin.` });
+        setFormOpen(false);
+        setFormData(emptyForm);
+        await fetchAdmins();
       }
-    } else {
-      toast({ title: 'Admin Created', description: `${formData.first_name} ${formData.last_name} has been added as admin.` });
-      setFormOpen(false);
-      setFormData(emptyForm);
-      await fetchAdmins();
+    } finally {
+      // ✅ Always reset saving — even if invokeWithAuth throws or hangs
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const handleEditAdmin = async () => {
     if (!editingAdmin) return;
     setSaving(true);
-    const { error } = await supabase
-      .from('admins')
-      .update({
-        first_name: formData.first_name,
-        last_name: formData.last_name,
-        middle_name: formData.middle_name || null,
-        contact_number: formData.contact_number || null,
-      })
-      .eq('id', editingAdmin.id);
-    if (error) {
-      toast({ title: 'Error', description: 'Failed to update admin.', variant: 'destructive' });
-    } else {
-      toast({ title: 'Updated', description: 'Admin profile has been updated.' });
-      setFormOpen(false);
-      setEditingAdmin(null);
-      setFormData(emptyForm);
-      await fetchAdmins();
+    try {
+      const { error } = await supabase
+        .from('admins')
+        .update({
+          first_name: formData.first_name,
+          last_name: formData.last_name,
+          middle_name: formData.middle_name || null,
+          contact_number: formData.contact_number || null,
+        })
+        .eq('id', editingAdmin.id);
+      if (error) {
+        toast({ title: 'Error', description: 'Failed to update admin.', variant: 'destructive' });
+      } else {
+        toast({ title: 'Updated', description: 'Admin profile has been updated.' });
+        setFormOpen(false);
+        setEditingAdmin(null);
+        setFormData(emptyForm);
+        await fetchAdmins();
+      }
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const handleArchiveAdmin = async (action: 'archive' | 'unarchive') => {
@@ -229,9 +239,10 @@ const AdminManagement = () => {
       }
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setArchiveTarget(null);
+      setArchiving(false);
     }
-    setArchiveTarget(null);
-    setArchiving(false);
   };
 
   const openEdit = (a: AdminRow) => {
