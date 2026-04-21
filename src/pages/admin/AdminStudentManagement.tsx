@@ -197,7 +197,7 @@ const AdminStudentManagement = () => {
         toast({ title: 'Error', description: errMsg, variant: 'destructive' });
       }
     } else {
-      toast({ title: 'Student Created', description: `${formData.first_name} ${formData.last_name} has been added. Password sent via email.` });
+      toast({ title: 'Student Created', description: `${formData.first_name} ${formData.last_name} has been added. Login details sent via email.` });
       setFormOpen(false);
       setFormData(emptyForm);
       await fetchStudents();
@@ -378,7 +378,7 @@ const AdminStudentManagement = () => {
     }
     toast({
       title: 'Import Complete',
-      description: `${success} students imported. Passwords auto-generated and sent via email${failed > 0 ? `, ${failed} failed` : ''}.`,
+      description: `${success} students imported. Login details sent via email${failed > 0 ? `, ${failed} failed` : ''}.`,
       variant: failed > 0 && success === 0 ? 'destructive' : 'default',
     });
     setImportDialogOpen(false);
@@ -530,9 +530,7 @@ const AdminStudentManagement = () => {
           <DialogHeader>
             <DialogTitle>{editingStudent ? 'Edit Student' : 'Add New Student'}</DialogTitle>
             <DialogDescription>
-              {editingStudent
-                ? 'Update the student profile information below.'
-                : 'Fill in the details. Password will be auto-generated from last name + last 4 digits of contact number.'}
+              {editingStudent ? 'Update the student profile information below.' : 'Fill in the details to create a new student account.'}
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-4">
@@ -559,7 +557,6 @@ const AdminStudentManagement = () => {
               <Input
                 value={formData.contact_number}
                 onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })}
-                placeholder="Required for password"
               />
             </div>
             <div className="space-y-2">
@@ -570,11 +567,6 @@ const AdminStudentManagement = () => {
               <Label>Section</Label>
               <Input value={formData.section} onChange={(e) => setFormData({ ...formData, section: e.target.value })} />
             </div>
-            {!editingStudent && formData.last_name && formData.contact_number.length >= 4 && (
-              <div className="col-span-2 p-3 bg-muted rounded-lg text-sm text-muted-foreground">
-                🔑 Auto password: <strong className="text-foreground">{formData.last_name.replace(/\s+/g, '')}{formData.contact_number.slice(-4)}</strong>
-              </div>
-            )}
           </div>
           <DialogFooter>
             <DialogClose asChild>
@@ -656,7 +648,7 @@ const AdminStudentManagement = () => {
               Import Preview — {importPreview.length} students
             </DialogTitle>
             <DialogDescription>
-              Passwords will be auto-generated: Last Name + last 4 digits of contact number.
+              Review the students below before confirming the import.
             </DialogDescription>
           </DialogHeader>
 
