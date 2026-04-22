@@ -7,6 +7,9 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
@@ -29,6 +32,7 @@ interface AdminRow {
   last_name: string;
   middle_name: string | null;
   contact_number: string | null;
+  admin_role: string | null;
   is_archived: boolean | null;
   archived_at: string | null;
   created_at: string;
@@ -40,7 +44,7 @@ interface AdminFormData {
   last_name: string;
   middle_name: string;
   contact_number: string;
-  password: string;
+  admin_role: string;
 }
 
 const emptyForm: AdminFormData = {
@@ -49,23 +53,31 @@ const emptyForm: AdminFormData = {
   last_name: '',
   middle_name: '',
   contact_number: '',
-  password: '',
+  admin_role: 'admin',
 };
 
-// ✅ Fixed: use getSession() instead of refreshSession() to avoid hanging
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Admin',
+  programhead: 'Program Head',
+  cashier: 'Cashier',
+};
+
+const ROLE_COLORS: Record<string, string> = {
+  admin: 'bg-blue-100 text-blue-700',
+  programhead: 'bg-purple-100 text-purple-700',
+  cashier: 'bg-green-100 text-green-700',
+};
+
 const invokeWithAuth = async (fnName: string, body: object) => {
   const { data: { session }, error: sessionError } = await supabase.auth.getSession();
   const token = session?.access_token;
-
   if (sessionError || !token) {
     await supabase.auth.signOut();
     window.location.href = '/';
     return { data: null, error: new Error('Session expired.') };
   }
-
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
       method: 'POST',
@@ -76,13 +88,10 @@ const invokeWithAuth = async (fnName: string, body: object) => {
       },
       body: JSON.stringify(body),
     });
-
     const data = await response.json();
-
     if (!response.ok) {
       return { data: null, error: new Error(data?.error || `Request failed with status ${response.status}`) };
     }
-
     return { data, error: null };
   } catch (err: any) {
     return { data: null, error: new Error(err.message || 'Network error') };
@@ -108,7 +117,7 @@ const AdminManagement = () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('admins')
-      .select('id, user_id, username, first_name, last_name, middle_name, contact_number, is_archived, archived_at, created_at')
+      .select('id, user_id, username, first_name, last_name, middle_name, contact_number, admin_role, is_archived, archived_at, created_at')
       .order('created_at', { ascending: false });
     if (error) {
       toast({ title: 'Error', description: 'Failed to load admins.', variant: 'destructive' });
@@ -128,7 +137,8 @@ const AdminManagement = () => {
     return (
       a.first_name.toLowerCase().includes(q) ||
       a.last_name.toLowerCase().includes(q) ||
-      a.username.toLowerCase().includes(q)
+      a.username.toLowerCase().includes(q) ||
+      (a.admin_role || '').toLowerCase().includes(q)
     );
   });
 
@@ -148,12 +158,12 @@ const AdminManagement = () => {
   };
 
   const handleAddAdmin = async () => {
-    if (!formData.username || !formData.first_name || !formData.last_name || !formData.password) {
-      toast({ title: 'Missing fields', description: 'Email, first name, last name, and password are required.', variant: 'destructive' });
+    if (!formData.username || !formData.first_name || !formData.last_name) {
+      toast({ title: 'Missing fields', description: 'Email, first name, and last name are required.', variant: 'destructive' });
       return;
     }
-    if (formData.password.length < 6) {
-      toast({ title: 'Weak password', description: 'Password must be at least 6 characters.', variant: 'destructive' });
+    if (!formData.contact_number || formData.contact_number.length < 10) {
+      toast({ title: 'Missing contact number', description: 'Contact number is required to generate the password.', variant: 'destructive' });
       return;
     }
     const dupMessage = checkDuplicate(formData.username);
@@ -166,11 +176,11 @@ const AdminManagement = () => {
     try {
       const { error } = await invokeWithAuth('create-admin', {
         email: formData.username,
-        password: formData.password,
         first_name: formData.first_name,
         last_name: formData.last_name,
         middle_name: formData.middle_name || null,
-        contact_number: formData.contact_number || null,
+        contact_number: formData.contact_number,
+        admin_role: formData.admin_role,
       });
       if (error) {
         const errMsg = error.message || 'Failed to create admin.';
@@ -181,13 +191,12 @@ const AdminManagement = () => {
           toast({ title: 'Error', description: errMsg, variant: 'destructive' });
         }
       } else {
-        toast({ title: 'Admin Created', description: `${formData.first_name} ${formData.last_name} has been added as admin.` });
+        toast({ title: 'Admin Created', description: `${formData.first_name} ${formData.last_name} has been added as ${ROLE_LABELS[formData.admin_role]}. Login details sent via email.` });
         setFormOpen(false);
         setFormData(emptyForm);
         await fetchAdmins();
       }
     } finally {
-      // ✅ Always reset saving — even if invokeWithAuth throws or hangs
       setSaving(false);
     }
   };
@@ -203,6 +212,7 @@ const AdminManagement = () => {
           last_name: formData.last_name,
           middle_name: formData.middle_name || null,
           contact_number: formData.contact_number || null,
+          admin_role: formData.admin_role,
         })
         .eq('id', editingAdmin.id);
       if (error) {
@@ -253,7 +263,7 @@ const AdminManagement = () => {
       last_name: a.last_name,
       middle_name: a.middle_name || '',
       contact_number: a.contact_number || '',
-      password: '',
+      admin_role: a.admin_role || 'admin',
     });
     setFormOpen(true);
   };
@@ -265,6 +275,7 @@ const AdminManagement = () => {
           <TableRow>
             <TableHead>Name</TableHead>
             <TableHead>Email</TableHead>
+            <TableHead>Role</TableHead>
             <TableHead>Contact</TableHead>
             {isArchived && <TableHead>Archived On</TableHead>}
             <TableHead className="text-right">Actions</TableHead>
@@ -277,6 +288,11 @@ const AdminManagement = () => {
                 {a.first_name} {a.middle_name ? a.middle_name + ' ' : ''}{a.last_name}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">{a.username}</TableCell>
+              <TableCell>
+                <span className={`text-xs px-2 py-1 rounded-full font-medium ${ROLE_COLORS[a.admin_role || 'admin'] || 'bg-gray-100 text-gray-700'}`}>
+                  {ROLE_LABELS[a.admin_role || 'admin'] || a.admin_role || 'Admin'}
+                </span>
+              </TableCell>
               <TableCell className="text-sm">{a.contact_number || '—'}</TableCell>
               {isArchived && (
                 <TableCell className="text-sm text-muted-foreground">
@@ -324,7 +340,7 @@ const AdminManagement = () => {
       <div className="relative max-w-md">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
-          placeholder="Search by name or email..."
+          placeholder="Search by name, email, or role..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-10"
@@ -387,21 +403,17 @@ const AdminManagement = () => {
           <DialogHeader>
             <DialogTitle>{editingAdmin ? 'Edit Admin' : 'Add New Admin'}</DialogTitle>
             <DialogDescription>
-              {editingAdmin ? 'Update the admin profile information below.' : 'Fill in the details to create a new admin account.'}
+              {editingAdmin
+                ? 'Update the admin profile information below.'
+                : 'Fill in the details. Password will be auto-generated from last name + last 4 digits of contact number.'}
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-4">
             {!editingAdmin && (
-              <>
-                <div className="col-span-2 space-y-2">
-                  <Label>Email *</Label>
-                  <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="admin@email.com" />
-                </div>
-                <div className="col-span-2 space-y-2">
-                  <Label>Password *</Label>
-                  <Input type="password" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} placeholder="Minimum 6 characters" />
-                </div>
-              </>
+              <div className="col-span-2 space-y-2">
+                <Label>Email *</Label>
+                <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="admin@email.com" />
+              </div>
             )}
             <div className="space-y-2">
               <Label>First Name *</Label>
@@ -416,8 +428,24 @@ const AdminManagement = () => {
               <Input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
             </div>
             <div className="space-y-2">
-              <Label>Contact Number</Label>
-              <Input value={formData.contact_number} onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })} />
+              <Label>Contact Number *</Label>
+              <Input
+                value={formData.contact_number}
+                onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })}
+              />
+            </div>
+            <div className="col-span-2 space-y-2">
+              <Label>Role *</Label>
+              <Select value={formData.admin_role} onValueChange={(val) => setFormData({ ...formData, admin_role: val })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select role" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="programhead">Program Head</SelectItem>
+                  <SelectItem value="cashier">Cashier</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter>
