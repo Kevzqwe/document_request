@@ -19,7 +19,6 @@ function toStr(val: any): string {
   return String(val).trim();
 }
 
-// Auto-generate password: LastName + last 4 digits of phone
 function generatePassword(lastName: string, contactNumber: string): string {
   const cleanedPhone = contactNumber.replace(/\D/g, '');
   const last4 = cleanedPhone.length >= 4
@@ -29,7 +28,6 @@ function generatePassword(lastName: string, contactNumber: string): string {
   return `${cleanedLastName}${last4}`;
 }
 
-// Map admin_role → which table to insert profile into
 const ROLE_TABLE: Record<string, string> = {
   admin:       'admins',
   cashier:     'cashiers',
@@ -44,11 +42,12 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const supabaseUrl      = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey   = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabaseAdmin    = createClient(supabaseUrl, serviceRoleKey);
+    const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const anonKey        = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const supabaseAdmin  = createClient(supabaseUrl, serviceRoleKey);
 
-    // ── Auth check ──────────────────────────────────────────────
+    // ── Get token ────────────────────────────────────────────────
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Unauthorized: missing Bearer token' }), {
@@ -56,23 +55,23 @@ Deno.serve(async (req) => {
       });
     }
 
-    const token  = authHeader.replace('Bearer ', '').trim();
-    const isJWT  = token.split('.').length === 3;
-    if (!isJWT) {
-      return new Response(JSON.stringify({ error: 'Unauthorized: invalid token format.' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    const token = authHeader.replace('Bearer ', '').trim();
+
+    // ── Verify via anon client (handles ES256 + HS256) ───────────
+    const supabaseUser = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
 
     const { data: { user: caller }, error: authError } =
-      await supabaseAdmin.auth.getUser(token);
+      await supabaseUser.auth.getUser();
+
     if (authError || !caller) {
       return new Response(JSON.stringify({ error: 'Unauthorized: Invalid or expired session.' }), {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    // Caller must be an admin
+    // ── Must be admin in user_roles ──────────────────────────────
     const { data: roleData } = await supabaseAdmin
       .from('user_roles')
       .select('role')
@@ -113,9 +112,9 @@ Deno.serve(async (req) => {
     if (!email)          return err400('email is required', corsHeaders);
     if (!first_name)     return err400('first_name is required', corsHeaders);
     if (!last_name)      return err400('last_name is required', corsHeaders);
-    if (!contact_number) return err400('contact_number is required for password generation', corsHeaders);
+    if (!contact_number) return err400('contact_number is required', corsHeaders);
 
-    // ── Create auth user ─────────────────────────────────────────
+    // ── Create Supabase auth user ────────────────────────────────
     const password = generatePassword(last_name, contact_number);
 
     const { data: newUser, error: createError } =
@@ -124,7 +123,7 @@ Deno.serve(async (req) => {
         password,
         email_confirm: true,
         user_metadata: {
-          role: admin_role,            // store the actual role
+          role: admin_role,
           username: email.toLowerCase(),
           first_name,
           last_name,
@@ -142,58 +141,52 @@ Deno.serve(async (req) => {
 
     const newUserId = newUser.user!.id;
 
-    // Small delay to let Supabase triggers settle
-    await new Promise(r => setTimeout(r, 600));
+    // Wait for any DB triggers to settle
+    await new Promise(r => setTimeout(r, 800));
 
-    // ── Insert into user_roles ───────────────────────────────────
-    // Use 'admin' as the role value for all staff so the RLS
-    // policies that check role = 'admin' keep working.
-    // If your app_role enum supports cashier/programhead you can
-    // change the value below to admin_role directly.
+    // ── Insert into user_roles (ignore if trigger already did it) 
     const { error: roleInsertError } = await supabaseAdmin
       .from('user_roles')
       .insert({ user_id: newUserId, role: admin_role });
 
     if (roleInsertError) {
-      console.error('user_roles insert error:', roleInsertError.message);
-      // Non-fatal – trigger may have already inserted it; log and continue
+      console.warn('user_roles insert (may already exist):', roleInsertError.message);
     }
 
-    // ── Insert profile into the role-specific table ──────────────
-    const profileTable = ROLE_TABLE[admin_role]; // admins | cashiers | programheads
+    // ── Insert profile into role-specific table ──────────────────
+    // Using plain INSERT — make sure cashiers/programheads/admins
+    // tables have UNIQUE constraint on user_id (run the SQL below)
+    const profileTable = ROLE_TABLE[admin_role];
 
     const { error: profileError } = await supabaseAdmin
       .from(profileTable)
-      .upsert(
-        {
-          user_id:        newUserId,
-          username:       email.toLowerCase(),
-          first_name,
-          last_name,
-          middle_name:    middle_name || null,
-          contact_number: contact_number || null,
-          admin_role,
-          is_archived:    false,
-        },
-        { onConflict: 'user_id' },   // safe to re-run
-      );
+      .insert({
+        user_id:        newUserId,
+        username:       email.toLowerCase(),
+        first_name,
+        last_name,
+        middle_name:    middle_name || null,
+        contact_number: contact_number || null,
+        admin_role,
+        is_archived:    false,
+      });
 
     if (profileError) {
-      console.error(`${profileTable} upsert error:`, profileError.message);
-      // Return error so the front-end knows something went wrong
-      return new Response(JSON.stringify({ error: `Profile insert failed: ${profileError.message}` }), {
-        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      console.error(`${profileTable} insert error:`, profileError.message);
+      return new Response(
+        JSON.stringify({ error: `Profile insert failed: ${profileError.message}` }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
     }
 
-    // ── Send welcome e-mail ──────────────────────────────────────
+    // ── Send welcome email ───────────────────────────────────────
     try {
       const roleLabel =
         admin_role === 'programhead' ? 'Program Head'
         : admin_role === 'cashier'   ? 'Cashier'
         : 'Administrator';
 
-      const emailRes = await fetch(`${supabaseUrl}/functions/v1/send-gmail`, {
+      await fetch(`${supabaseUrl}/functions/v1/send-gmail`, {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
@@ -210,16 +203,14 @@ Deno.serve(async (req) => {
           section:     '',
         }),
       });
-      if (!emailRes.ok) console.error('Welcome email failed');
-      else console.log('Welcome email sent to:', email);
     } catch (emailErr: any) {
       console.error('Email error (non-critical):', emailErr.message);
     }
 
     return new Response(JSON.stringify({
-      success:  true,
-      user_id:  newUserId,
-      message:  `${admin_role} account created for ${first_name} ${last_name}.`,
+      success: true,
+      user_id: newUserId,
+      message: `${admin_role} account created for ${first_name} ${last_name}.`,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -233,7 +224,6 @@ Deno.serve(async (req) => {
   }
 });
 
-// ── helpers ──────────────────────────────────────────────────────────────────
 function err400(msg: string, corsHeaders: Record<string, string>) {
   return new Response(JSON.stringify({ error: msg }), {
     status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
