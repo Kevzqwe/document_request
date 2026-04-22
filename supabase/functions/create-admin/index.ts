@@ -9,7 +9,7 @@ function getCorsHeaders(req: Request) {
   const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
   };
 }
@@ -38,29 +38,34 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const anonKey        = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseAdmin  = createClient(supabaseUrl, serviceRoleKey);
 
-    // ── Auth: get caller ─────────────────────────────────────────
+    // ── Auth: same pattern as create-student ────────────────────
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Unauthorized: missing Bearer token' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
     const token = authHeader.replace('Bearer ', '').trim();
+    const isJWT = token.split('.').length === 3;
+    if (!isJWT) {
+      return new Response(JSON.stringify({ error: 'Unauthorized: invalid token format.' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
-    const supabaseUser = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-
-    const { data: { user: caller }, error: authError } =
-      await supabaseUser.auth.getUser();
-
+    // Use supabaseAdmin.auth.getUser(token) — same approach as create-student
+    const { data: { user: caller }, error: authError } = await supabaseAdmin.auth.getUser(token);
     if (authError || !caller) {
-      return new Response(JSON.stringify({ error: 'Unauthorized: Invalid or expired session.' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      return new Response(JSON.stringify({
+        error: `Unauthorized: ${authError?.message || 'Invalid or expired session.'}`,
+      }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
@@ -74,16 +79,19 @@ Deno.serve(async (req) => {
 
     if (!roleData) {
       return new Response(JSON.stringify({ error: 'Forbidden: admin only' }), {
-        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 403,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
     // ── Parse body ───────────────────────────────────────────────
     let body: any;
-    try { body = await req.json(); }
-    catch {
+    try {
+      body = await req.json();
+    } catch {
       return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
@@ -109,6 +117,7 @@ Deno.serve(async (req) => {
 
     // ── Create Supabase auth user ────────────────────────────────
     const password = generatePassword(last_name, contact_number);
+    console.log('Auto-generated password for:', email, '→', password);
 
     const { data: newUser, error: createError } =
       await supabaseAdmin.auth.admin.createUser({
@@ -128,7 +137,8 @@ Deno.serve(async (req) => {
     if (createError) {
       console.error('createUser error:', createError.message);
       return new Response(JSON.stringify({ error: createError.message }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
@@ -146,8 +156,7 @@ Deno.serve(async (req) => {
       console.warn('user_roles insert warning:', roleInsertError.message);
     }
 
-    // ── Always insert into admins table so all roles show on the
-    //    Admin Management page. admin_role column tells them apart.
+    // ── Insert into admins table ─────────────────────────────────
     const { error: profileError } = await supabaseAdmin
       .from('admins')
       .insert({
@@ -157,7 +166,7 @@ Deno.serve(async (req) => {
         last_name,
         middle_name:    middle_name || null,
         contact_number: contact_number || null,
-        admin_role,       // 'admin' | 'cashier' | 'programhead'
+        admin_role,
         is_archived:    false,
       });
 
@@ -176,7 +185,7 @@ Deno.serve(async (req) => {
         : admin_role === 'cashier'   ? 'Cashier'
         : 'Administrator';
 
-      await fetch(`${supabaseUrl}/functions/v1/send-gmail`, {
+      const emailRes = await fetch(`${supabaseUrl}/functions/v1/send-gmail`, {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
@@ -193,6 +202,12 @@ Deno.serve(async (req) => {
           section:     '',
         }),
       });
+      const emailData = await emailRes.json();
+      if (!emailRes.ok) {
+        console.error('Email sending failed:', JSON.stringify(emailData));
+      } else {
+        console.log('Welcome email sent successfully to:', email);
+      }
     } catch (emailErr: any) {
       console.error('Email error (non-critical):', emailErr.message);
     }
@@ -209,13 +224,15 @@ Deno.serve(async (req) => {
   } catch (err: any) {
     console.error('Unexpected error:', err);
     return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });
 
 function err400(msg: string, corsHeaders: Record<string, string>) {
   return new Response(JSON.stringify({ error: msg }), {
-    status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    status: 400,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 }

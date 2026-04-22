@@ -68,6 +68,41 @@ const ROLE_COLORS: Record<string, string> = {
   cashier: 'bg-green-100 text-green-700',
 };
 
+// ── Same invokeWithAuth helper used in AdminStudentManagement ──────────────
+const invokeWithAuth = async (fnName: string, body: object) => {
+  const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+  let token = refreshed?.session?.access_token;
+  if (refreshError || !token) {
+    const { data: { session: existing } } = await supabase.auth.getSession();
+    token = existing?.access_token;
+  }
+  if (!token) {
+    await supabase.auth.signOut();
+    window.location.href = '/';
+    return { data: null, error: new Error('Session expired. Please log in again.') };
+  }
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'apikey': supabaseAnonKey,
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      return { data: null, error: new Error(data?.error || `Request failed with status ${response.status}`) };
+    }
+    return { data, error: null };
+  } catch (err: any) {
+    return { data: null, error: new Error(err.message || 'Network error') };
+  }
+};
+
 const AdminManagement = () => {
   const { toast } = useToast();
   const [admins, setAdmins] = useState<AdminRow[]>([]);
@@ -127,6 +162,13 @@ const AdminManagement = () => {
     return null;
   };
 
+  // ── Contact number handler: digits only, max 11 digits ────────────────────
+  const handleContactChange = (val: string) => {
+    const digitsOnly = val.replace(/[^0-9]/g, '');
+    if (digitsOnly.length > 11) return; // reject input beyond 11 digits
+    setFormData(prev => ({ ...prev, contact_number: digitsOnly }));
+  };
+
   const handleAddAdmin = async () => {
     if (!formData.username || !formData.first_name || !formData.last_name) {
       toast({ title: 'Missing fields', description: 'Email, first name, and last name are required.', variant: 'destructive' });
@@ -144,82 +186,69 @@ const AdminManagement = () => {
     }
 
     setSaving(true);
-    try {
-      // ✅ supabase.functions.invoke handles auth token automatically
-      const { data, error } = await supabase.functions.invoke('create-admin', {
-        body: {
-          email: formData.username,
-          first_name: formData.first_name,
-          last_name: formData.last_name,
-          middle_name: formData.middle_name || null,
-          contact_number: formData.contact_number,
-          admin_role: formData.admin_role,
-        },
-      });
+    const { error } = await invokeWithAuth('create-admin', {
+      email: formData.username,
+      first_name: formData.first_name,
+      last_name: formData.last_name,
+      middle_name: formData.middle_name || null,
+      contact_number: formData.contact_number,
+      admin_role: formData.admin_role,
+    });
 
-      if (error) {
-        const errMsg = error.message || 'Failed to create admin.';
-        if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('exists')) {
-          setDuplicateAlertMessage(`This admin already exists. ${errMsg}`);
-          setDuplicateAlertOpen(true);
-        } else {
-          toast({ title: 'Error', description: errMsg, variant: 'destructive' });
-        }
+    if (error) {
+      const errMsg = error.message || 'Failed to create admin.';
+      if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('exists')) {
+        setDuplicateAlertMessage(`This admin already exists. ${errMsg}`);
+        setDuplicateAlertOpen(true);
       } else {
-        toast({
-          title: 'Account Created',
-          description: `${formData.first_name} ${formData.last_name} has been added as ${ROLE_LABELS[formData.admin_role]}. Login details sent via email.`,
-        });
-        setFormOpen(false);
-        setFormData(emptyForm);
-        await fetchAdmins();
+        toast({ title: 'Error', description: errMsg, variant: 'destructive' });
       }
-    } finally {
-      setSaving(false);
+    } else {
+      toast({
+        title: 'Account Created',
+        description: `${formData.first_name} ${formData.last_name} has been added as ${ROLE_LABELS[formData.admin_role]}. Login details sent via email.`,
+      });
+      setFormOpen(false);
+      setFormData(emptyForm);
+      await fetchAdmins();
     }
+    setSaving(false);
   };
 
   const handleEditAdmin = async () => {
     if (!editingAdmin) return;
     setSaving(true);
-    try {
-      const { error } = await supabase
-        .from('admins')
-        .update({
-          first_name: formData.first_name,
-          last_name: formData.last_name,
-          middle_name: formData.middle_name || null,
-          contact_number: formData.contact_number || null,
-          admin_role: formData.admin_role,
-        })
-        .eq('id', editingAdmin.id);
-      if (error) {
-        toast({ title: 'Error', description: 'Failed to update admin.', variant: 'destructive' });
-      } else {
-        toast({ title: 'Updated', description: 'Admin profile has been updated.' });
-        setFormOpen(false);
-        setEditingAdmin(null);
-        setFormData(emptyForm);
-        await fetchAdmins();
-      }
-    } finally {
-      setSaving(false);
+    const { error } = await supabase
+      .from('admins')
+      .update({
+        first_name: formData.first_name,
+        last_name: formData.last_name,
+        middle_name: formData.middle_name || null,
+        contact_number: formData.contact_number || null,
+        admin_role: formData.admin_role,
+      })
+      .eq('id', editingAdmin.id);
+    if (error) {
+      toast({ title: 'Error', description: 'Failed to update admin.', variant: 'destructive' });
+    } else {
+      toast({ title: 'Updated', description: 'Admin profile has been updated.' });
+      setFormOpen(false);
+      setEditingAdmin(null);
+      setFormData(emptyForm);
+      await fetchAdmins();
     }
+    setSaving(false);
   };
 
   const handleArchiveAdmin = async (action: 'archive' | 'unarchive') => {
     if (!archiveTarget) return;
     setArchiving(true);
     try {
-      // ✅ supabase.functions.invoke handles auth token automatically
-      const { error } = await supabase.functions.invoke('archive-account', {
-        body: {
-          user_id: archiveTarget.user_id,
-          account_type: 'admin',
-          action,
-        },
+      const { error } = await invokeWithAuth('archive-account', {
+        user_id: archiveTarget.user_id,
+        account_type: 'admin',
+        action,
       });
-
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
@@ -231,10 +260,9 @@ const AdminManagement = () => {
       }
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    } finally {
-      setArchiveTarget(null);
-      setArchiving(false);
     }
+    setArchiveTarget(null);
+    setArchiving(false);
   };
 
   const openEdit = (a: AdminRow) => {
@@ -394,26 +422,44 @@ const AdminManagement = () => {
             {!editingAdmin && (
               <div className="col-span-2 space-y-2">
                 <Label>Email *</Label>
-                <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="user@email.com" />
+                <Input
+                  value={formData.username}
+                  onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                  placeholder="user@email.com"
+                />
               </div>
             )}
             <div className="space-y-2">
               <Label>First Name *</Label>
-              <Input value={formData.first_name} onChange={(e) => setFormData({ ...formData, first_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
+              <Input
+                value={formData.first_name}
+                onChange={(e) => setFormData({ ...formData, first_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
+              />
             </div>
             <div className="space-y-2">
               <Label>Last Name *</Label>
-              <Input value={formData.last_name} onChange={(e) => setFormData({ ...formData, last_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
+              <Input
+                value={formData.last_name}
+                onChange={(e) => setFormData({ ...formData, last_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
+              />
             </div>
             <div className="space-y-2">
               <Label>Middle Name</Label>
-              <Input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
+              <Input
+                value={formData.middle_name}
+                onChange={(e) => setFormData({ ...formData, middle_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
+              />
             </div>
             <div className="space-y-2">
-              <Label>Contact Number *</Label>
+              <Label>
+                Contact Number *
+                <span className="ml-1 text-xs text-muted-foreground">({formData.contact_number.length}/11)</span>
+              </Label>
               <Input
                 value={formData.contact_number}
-                onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })}
+                onChange={(e) => handleContactChange(e.target.value)}
+                placeholder="09XXXXXXXXX"
+                maxLength={11}
               />
             </div>
             <div className="col-span-2 space-y-2">
