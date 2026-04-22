@@ -68,36 +68,6 @@ const ROLE_COLORS: Record<string, string> = {
   cashier: 'bg-green-100 text-green-700',
 };
 
-const invokeWithAuth = async (fnName: string, body: object) => {
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-  const token = session?.access_token;
-  if (sessionError || !token) {
-    await supabase.auth.signOut();
-    window.location.href = '/';
-    return { data: null, error: new Error('Session expired.') };
-  }
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-  try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'apikey': supabaseAnonKey,
-      },
-      body: JSON.stringify(body),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      return { data: null, error: new Error(data?.error || `Request failed with status ${response.status}`) };
-    }
-    return { data, error: null };
-  } catch (err: any) {
-    return { data: null, error: new Error(err.message || 'Network error') };
-  }
-};
-
 const AdminManagement = () => {
   const { toast } = useToast();
   const [admins, setAdmins] = useState<AdminRow[]>([]);
@@ -172,16 +142,21 @@ const AdminManagement = () => {
       setDuplicateAlertOpen(true);
       return;
     }
+
     setSaving(true);
     try {
-      const { error } = await invokeWithAuth('create-admin', {
-        email: formData.username,
-        first_name: formData.first_name,
-        last_name: formData.last_name,
-        middle_name: formData.middle_name || null,
-        contact_number: formData.contact_number,
-        admin_role: formData.admin_role,
+      // ✅ supabase.functions.invoke handles auth token automatically
+      const { data, error } = await supabase.functions.invoke('create-admin', {
+        body: {
+          email: formData.username,
+          first_name: formData.first_name,
+          last_name: formData.last_name,
+          middle_name: formData.middle_name || null,
+          contact_number: formData.contact_number,
+          admin_role: formData.admin_role,
+        },
       });
+
       if (error) {
         const errMsg = error.message || 'Failed to create admin.';
         if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('exists')) {
@@ -191,7 +166,10 @@ const AdminManagement = () => {
           toast({ title: 'Error', description: errMsg, variant: 'destructive' });
         }
       } else {
-        toast({ title: 'Admin Created', description: `${formData.first_name} ${formData.last_name} has been added as ${ROLE_LABELS[formData.admin_role]}. Login details sent via email.` });
+        toast({
+          title: 'Account Created',
+          description: `${formData.first_name} ${formData.last_name} has been added as ${ROLE_LABELS[formData.admin_role]}. Login details sent via email.`,
+        });
         setFormOpen(false);
         setFormData(emptyForm);
         await fetchAdmins();
@@ -233,11 +211,15 @@ const AdminManagement = () => {
     if (!archiveTarget) return;
     setArchiving(true);
     try {
-      const { error } = await invokeWithAuth('archive-account', {
-        user_id: archiveTarget.user_id,
-        account_type: 'admin',
-        action,
+      // ✅ supabase.functions.invoke handles auth token automatically
+      const { error } = await supabase.functions.invoke('archive-account', {
+        body: {
+          user_id: archiveTarget.user_id,
+          account_type: 'admin',
+          action,
+        },
       });
+
       if (error) {
         toast({ title: 'Error', description: error.message, variant: 'destructive' });
       } else {
@@ -350,7 +332,7 @@ const AdminManagement = () => {
       {/* Active Admins */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="border-b bg-muted/30">
-          <CardTitle className="text-lg">Admins ({filtered.length})</CardTitle>
+          <CardTitle className="text-lg">Staff Accounts ({filtered.length})</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -359,7 +341,7 @@ const AdminManagement = () => {
             </div>
           ) : filtered.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
-              {search ? 'No admins match your search.' : 'No admins found.'}
+              {search ? 'No accounts match your search.' : 'No accounts found.'}
             </div>
           ) : (
             <AdminTable data={filtered} />
@@ -367,7 +349,7 @@ const AdminManagement = () => {
         </CardContent>
       </Card>
 
-      {/* Archived Admins */}
+      {/* Archived */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="cursor-pointer bg-muted/30" onClick={() => setShowArchived(!showArchived)}>
           <div className="flex items-center justify-between">
@@ -376,7 +358,7 @@ const AdminManagement = () => {
                 <Archive className="w-5 h-5 text-muted-foreground" />
               </div>
               <div>
-                <CardTitle className="text-lg">Archived Admins</CardTitle>
+                <CardTitle className="text-lg">Archived Accounts</CardTitle>
                 <p className="text-sm text-muted-foreground">Archived accounts are hidden from active lists</p>
               </div>
               <Badge variant="secondary">{archivedAdmins.length}</Badge>
@@ -389,7 +371,7 @@ const AdminManagement = () => {
         {showArchived && (
           <CardContent className="p-0">
             {filteredArchived.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">No archived admins.</div>
+              <div className="text-center py-8 text-muted-foreground">No archived accounts.</div>
             ) : (
               <AdminTable data={filteredArchived} isArchived />
             )}
@@ -401,10 +383,10 @@ const AdminManagement = () => {
       <Dialog open={formOpen} onOpenChange={(open) => { if (!open) { setFormOpen(false); setEditingAdmin(null); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{editingAdmin ? 'Edit Admin' : 'Add New Admin'}</DialogTitle>
+            <DialogTitle>{editingAdmin ? 'Edit Account' : 'Add New Account'}</DialogTitle>
             <DialogDescription>
               {editingAdmin
-                ? 'Update the admin profile information below.'
+                ? 'Update the profile information below.'
                 : 'Fill in the details. Password will be auto-generated from last name + last 4 digits of contact number.'}
             </DialogDescription>
           </DialogHeader>
@@ -412,7 +394,7 @@ const AdminManagement = () => {
             {!editingAdmin && (
               <div className="col-span-2 space-y-2">
                 <Label>Email *</Label>
-                <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="admin@email.com" />
+                <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="user@email.com" />
               </div>
             )}
             <div className="space-y-2">
@@ -454,7 +436,7 @@ const AdminManagement = () => {
             </DialogClose>
             <Button onClick={editingAdmin ? handleEditAdmin : handleAddAdmin} disabled={saving}>
               {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {editingAdmin ? 'Save Changes' : 'Create Admin'}
+              {editingAdmin ? 'Save Changes' : 'Create Account'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -465,12 +447,12 @@ const AdminManagement = () => {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {archiveTarget?.is_archived ? 'Restore Admin' : 'Archive Admin'}
+              {archiveTarget?.is_archived ? 'Restore Account' : 'Archive Account'}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {archiveTarget?.is_archived
-                ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active admins list again.`
-                : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from active list but data will be kept.`
+                ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active list again.`
+                : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from the active list but data will be kept.`
               }
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -494,7 +476,7 @@ const AdminManagement = () => {
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-amber-600">
               <AlertTriangle className="w-5 h-5" />
-              Duplicate Admin Found
+              Duplicate Account Found
             </AlertDialogTitle>
             <AlertDialogDescription>{duplicateAlertMessage}</AlertDialogDescription>
           </AlertDialogHeader>

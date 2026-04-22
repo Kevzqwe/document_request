@@ -28,12 +28,6 @@ function generatePassword(lastName: string, contactNumber: string): string {
   return `${cleanedLastName}${last4}`;
 }
 
-const ROLE_TABLE: Record<string, string> = {
-  admin:       'admins',
-  cashier:     'cashiers',
-  programhead: 'programheads',
-};
-
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -47,7 +41,7 @@ Deno.serve(async (req) => {
     const anonKey        = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseAdmin  = createClient(supabaseUrl, serviceRoleKey);
 
-    // ── Get token ────────────────────────────────────────────────
+    // ── Auth: get caller ─────────────────────────────────────────
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Unauthorized: missing Bearer token' }), {
@@ -57,7 +51,6 @@ Deno.serve(async (req) => {
 
     const token = authHeader.replace('Bearer ', '').trim();
 
-    // ── Verify via anon client (handles ES256 + HS256) ───────────
     const supabaseUser = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
@@ -71,7 +64,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ── Must be admin in user_roles ──────────────────────────────
+    // ── Caller must be admin ─────────────────────────────────────
     const { data: roleData } = await supabaseAdmin
       .from('user_roles')
       .select('role')
@@ -141,25 +134,22 @@ Deno.serve(async (req) => {
 
     const newUserId = newUser.user!.id;
 
-    // Wait for any DB triggers to settle
+    // Wait for DB triggers to settle
     await new Promise(r => setTimeout(r, 800));
 
-    // ── Insert into user_roles (ignore if trigger already did it) 
+    // ── Insert into user_roles ───────────────────────────────────
     const { error: roleInsertError } = await supabaseAdmin
       .from('user_roles')
       .insert({ user_id: newUserId, role: admin_role });
 
     if (roleInsertError) {
-      console.warn('user_roles insert (may already exist):', roleInsertError.message);
+      console.warn('user_roles insert warning:', roleInsertError.message);
     }
 
-    // ── Insert profile into role-specific table ──────────────────
-    // Using plain INSERT — make sure cashiers/programheads/admins
-    // tables have UNIQUE constraint on user_id (run the SQL below)
-    const profileTable = ROLE_TABLE[admin_role];
-
+    // ── Always insert into admins table so all roles show on the
+    //    Admin Management page. admin_role column tells them apart.
     const { error: profileError } = await supabaseAdmin
-      .from(profileTable)
+      .from('admins')
       .insert({
         user_id:        newUserId,
         username:       email.toLowerCase(),
@@ -167,12 +157,12 @@ Deno.serve(async (req) => {
         last_name,
         middle_name:    middle_name || null,
         contact_number: contact_number || null,
-        admin_role,
+        admin_role,       // 'admin' | 'cashier' | 'programhead'
         is_archived:    false,
       });
 
     if (profileError) {
-      console.error(`${profileTable} insert error:`, profileError.message);
+      console.error('admins insert error:', profileError.message);
       return new Response(
         JSON.stringify({ error: `Profile insert failed: ${profileError.message}` }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
