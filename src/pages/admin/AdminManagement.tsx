@@ -13,7 +13,8 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogClose,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+  DialogFooter, DialogClose,
 } from '@/components/ui/dialog';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -24,6 +25,9 @@ import {
   Archive, ArchiveRestore, ChevronDown, ChevronUp,
 } from 'lucide-react';
 
+// ── Source table is tracked so edits/archives hit the right table ─────────────
+type SourceTable = 'admins' | 'cashiers' | 'programheads';
+
 interface AdminRow {
   id: string;
   user_id: string;
@@ -32,10 +36,11 @@ interface AdminRow {
   last_name: string;
   middle_name: string | null;
   contact_number: string | null;
-  admin_role: string | null;
+  admin_role: string;           // normalized: 'admin' | 'cashier' | 'programhead'
   is_archived: boolean | null;
   archived_at: string | null;
   created_at: string;
+  _source: SourceTable;         // which table this row came from
 }
 
 interface AdminFormData {
@@ -68,7 +73,6 @@ const ROLE_COLORS: Record<string, string> = {
   cashier: 'bg-green-100 text-green-700',
 };
 
-// ── Same invokeWithAuth helper used in AdminStudentManagement ──────────────
 const invokeWithAuth = async (fnName: string, body: object) => {
   const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
   let token = refreshed?.session?.access_token;
@@ -81,15 +85,15 @@ const invokeWithAuth = async (fnName: string, body: object) => {
     window.location.href = '/';
     return { data: null, error: new Error('Session expired. Please log in again.') };
   }
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseUrl    = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/${fnName}`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type':  'application/json',
         'Authorization': `Bearer ${token}`,
-        'apikey': supabaseAnonKey,
+        'apikey':        supabaseAnonKey,
       },
       body: JSON.stringify(body),
     });
@@ -103,72 +107,92 @@ const invokeWithAuth = async (fnName: string, body: object) => {
   }
 };
 
+// ── Shared columns for all three tables ──────────────────────────────────────
+const BASE_COLS = 'id, user_id, username, first_name, last_name, middle_name, contact_number, is_archived, archived_at, created_at';
+
 const AdminManagement = () => {
   const { toast } = useToast();
-  const [admins, setAdmins] = useState<AdminRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingAdmin, setEditingAdmin] = useState<AdminRow | null>(null);
-  const [formData, setFormData] = useState<AdminFormData>(emptyForm);
-  const [saving, setSaving] = useState(false);
-  const [archiveTarget, setArchiveTarget] = useState<AdminRow | null>(null);
-  const [archiving, setArchiving] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  const [admins, setAdmins]                     = useState<AdminRow[]>([]);
+  const [loading, setLoading]                   = useState(true);
+  const [search, setSearch]                     = useState('');
+  const [formOpen, setFormOpen]                 = useState(false);
+  const [editingAdmin, setEditingAdmin]         = useState<AdminRow | null>(null);
+  const [formData, setFormData]                 = useState<AdminFormData>(emptyForm);
+  const [saving, setSaving]                     = useState(false);
+  const [archiveTarget, setArchiveTarget]       = useState<AdminRow | null>(null);
+  const [archiving, setArchiving]               = useState(false);
+  const [showArchived, setShowArchived]         = useState(false);
   const [duplicateAlertOpen, setDuplicateAlertOpen] = useState(false);
   const [duplicateAlertMessage, setDuplicateAlertMessage] = useState('');
 
+  // ── Fetch from all three tables in parallel ───────────────────────────────
   const fetchAdmins = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('admins')
-      .select('id, user_id, username, first_name, last_name, middle_name, contact_number, admin_role, is_archived, archived_at, created_at')
-      .order('created_at', { ascending: false });
-    if (error) {
-      toast({ title: 'Error', description: 'Failed to load admins.', variant: 'destructive' });
-    } else {
-      setAdmins(data || []);
+
+    const [adminsRes, cashiersRes, programheadsRes] = await Promise.all([
+      supabase.from('admins').select(`${BASE_COLS}, admin_role`).order('created_at', { ascending: false }),
+      supabase.from('cashiers').select(BASE_COLS).order('created_at', { ascending: false }),
+      supabase.from('programheads').select(BASE_COLS).order('created_at', { ascending: false }),
+    ]);
+
+    if (adminsRes.error || cashiersRes.error || programheadsRes.error) {
+      toast({ title: 'Error', description: 'Failed to load accounts.', variant: 'destructive' });
+      setLoading(false);
+      return;
     }
+
+    const normalize = (rows: any[], source: SourceTable, defaultRole: string): AdminRow[] =>
+      (rows || []).map((r) => ({
+        ...r,
+        admin_role: r.admin_role ?? defaultRole,
+        _source: source,
+      }));
+
+    const all = [
+      ...normalize(adminsRes.data, 'admins', 'admin'),
+      ...normalize(cashiersRes.data, 'cashiers', 'cashier'),
+      ...normalize(programheadsRes.data, 'programheads', 'programhead'),
+    ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    setAdmins(all);
     setLoading(false);
   };
 
   useEffect(() => { fetchAdmins(); }, []);
 
-  const activeAdmins = admins.filter(a => !a.is_archived);
-  const archivedAdmins = admins.filter(a => a.is_archived);
+  const activeAdmins   = admins.filter((a) => !a.is_archived);
+  const archivedAdmins = admins.filter((a) => a.is_archived);
 
-  const filtered = activeAdmins.filter((a) => {
+  const filterRows = (rows: AdminRow[]) => {
     const q = search.toLowerCase();
-    return (
+    return rows.filter((a) =>
       a.first_name.toLowerCase().includes(q) ||
       a.last_name.toLowerCase().includes(q) ||
       a.username.toLowerCase().includes(q) ||
-      (a.admin_role || '').toLowerCase().includes(q)
+      a.admin_role.toLowerCase().includes(q),
     );
-  });
+  };
 
-  const filteredArchived = archivedAdmins.filter((a) => {
-    const q = search.toLowerCase();
-    return (
-      a.first_name.toLowerCase().includes(q) ||
-      a.last_name.toLowerCase().includes(q) ||
-      a.username.toLowerCase().includes(q)
-    );
-  });
+  const filtered         = filterRows(activeAdmins);
+  const filteredArchived = filterRows(archivedAdmins);
 
   const checkDuplicate = (email: string): string | null => {
-    const existing = activeAdmins.find(a => a.username.toLowerCase() === email.toLowerCase());
-    if (existing) return `An admin with email "${email}" already exists (${existing.first_name} ${existing.last_name}).`;
+    const existing = activeAdmins.find(
+      (a) => a.username.toLowerCase() === email.toLowerCase(),
+    );
+    if (existing) {
+      return `An account with email "${email}" already exists (${existing.first_name} ${existing.last_name}).`;
+    }
     return null;
   };
 
-  // ── Contact number handler: digits only, max 11 digits ────────────────────
   const handleContactChange = (val: string) => {
     const digitsOnly = val.replace(/[^0-9]/g, '');
-    if (digitsOnly.length > 11) return; // reject input beyond 11 digits
-    setFormData(prev => ({ ...prev, contact_number: digitsOnly }));
+    if (digitsOnly.length > 11) return;
+    setFormData((prev) => ({ ...prev, contact_number: digitsOnly }));
   };
 
+  // ── Create — edge function routes to the correct table ───────────────────
   const handleAddAdmin = async () => {
     if (!formData.username || !formData.first_name || !formData.last_name) {
       toast({ title: 'Missing fields', description: 'Email, first name, and last name are required.', variant: 'destructive' });
@@ -187,18 +211,18 @@ const AdminManagement = () => {
 
     setSaving(true);
     const { error } = await invokeWithAuth('create-admin', {
-      email: formData.username,
-      first_name: formData.first_name,
-      last_name: formData.last_name,
-      middle_name: formData.middle_name || null,
+      email:          formData.username,
+      first_name:     formData.first_name,
+      last_name:      formData.last_name,
+      middle_name:    formData.middle_name || null,
       contact_number: formData.contact_number,
-      admin_role: formData.admin_role,
+      admin_role:     formData.admin_role,
     });
 
     if (error) {
-      const errMsg = error.message || 'Failed to create admin.';
+      const errMsg = error.message || 'Failed to create account.';
       if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('exists')) {
-        setDuplicateAlertMessage(`This admin already exists. ${errMsg}`);
+        setDuplicateAlertMessage(`This account already exists. ${errMsg}`);
         setDuplicateAlertOpen(true);
       } else {
         toast({ title: 'Error', description: errMsg, variant: 'destructive' });
@@ -206,7 +230,7 @@ const AdminManagement = () => {
     } else {
       toast({
         title: 'Account Created',
-        description: `${formData.first_name} ${formData.last_name} has been added as ${ROLE_LABELS[formData.admin_role]}. Login details sent via email.`,
+        description: `${formData.first_name} ${formData.last_name} added as ${ROLE_LABELS[formData.admin_role]}. Login details sent via email.`,
       });
       setFormOpen(false);
       setFormData(emptyForm);
@@ -215,23 +239,32 @@ const AdminManagement = () => {
     setSaving(false);
   };
 
+  // ── Edit — updates the correct table based on _source ────────────────────
   const handleEditAdmin = async () => {
     if (!editingAdmin) return;
     setSaving(true);
+
+    const updatePayload: Record<string, any> = {
+      first_name:     formData.first_name,
+      last_name:      formData.last_name,
+      middle_name:    formData.middle_name || null,
+      contact_number: formData.contact_number || null,
+    };
+
+    // Only the admins table has an admin_role column
+    if (editingAdmin._source === 'admins') {
+      updatePayload.admin_role = formData.admin_role;
+    }
+
     const { error } = await supabase
-      .from('admins')
-      .update({
-        first_name: formData.first_name,
-        last_name: formData.last_name,
-        middle_name: formData.middle_name || null,
-        contact_number: formData.contact_number || null,
-        admin_role: formData.admin_role,
-      })
+      .from(editingAdmin._source)
+      .update(updatePayload)
       .eq('id', editingAdmin.id);
+
     if (error) {
-      toast({ title: 'Error', description: 'Failed to update admin.', variant: 'destructive' });
+      toast({ title: 'Error', description: 'Failed to update account.', variant: 'destructive' });
     } else {
-      toast({ title: 'Updated', description: 'Admin profile has been updated.' });
+      toast({ title: 'Updated', description: 'Account profile has been updated.' });
       setFormOpen(false);
       setEditingAdmin(null);
       setFormData(emptyForm);
@@ -245,8 +278,10 @@ const AdminManagement = () => {
     setArchiving(true);
     try {
       const { error } = await invokeWithAuth('archive-account', {
-        user_id: archiveTarget.user_id,
-        account_type: 'admin',
+        user_id:      archiveTarget.user_id,
+        account_type: archiveTarget._source === 'admins' ? 'admin'
+                    : archiveTarget._source === 'cashiers' ? 'cashier'
+                    : 'programhead',
         action,
       });
       if (error) {
@@ -268,17 +303,17 @@ const AdminManagement = () => {
   const openEdit = (a: AdminRow) => {
     setEditingAdmin(a);
     setFormData({
-      username: a.username,
-      first_name: a.first_name,
-      last_name: a.last_name,
-      middle_name: a.middle_name || '',
+      username:       a.username,
+      first_name:     a.first_name,
+      last_name:      a.last_name,
+      middle_name:    a.middle_name || '',
       contact_number: a.contact_number || '',
-      admin_role: a.admin_role || 'admin',
+      admin_role:     a.admin_role,
     });
     setFormOpen(true);
   };
 
-  const AdminTable = ({ data, isArchived = false }: { data: AdminRow[], isArchived?: boolean }) => (
+  const AdminTable = ({ data, isArchived = false }: { data: AdminRow[]; isArchived?: boolean }) => (
     <div className="overflow-x-auto">
       <Table>
         <TableHeader>
@@ -293,14 +328,14 @@ const AdminManagement = () => {
         </TableHeader>
         <TableBody>
           {data.map((a) => (
-            <TableRow key={a.id} className={isArchived ? 'opacity-60' : ''}>
+            <TableRow key={`${a._source}-${a.id}`} className={isArchived ? 'opacity-60' : ''}>
               <TableCell className="font-medium">
                 {a.first_name} {a.middle_name ? a.middle_name + ' ' : ''}{a.last_name}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">{a.username}</TableCell>
               <TableCell>
-                <span className={`text-xs px-2 py-1 rounded-full font-medium ${ROLE_COLORS[a.admin_role || 'admin'] || 'bg-gray-100 text-gray-700'}`}>
-                  {ROLE_LABELS[a.admin_role || 'admin'] || a.admin_role || 'Admin'}
+                <span className={`text-xs px-2 py-1 rounded-full font-medium ${ROLE_COLORS[a.admin_role] || 'bg-gray-100 text-gray-700'}`}>
+                  {ROLE_LABELS[a.admin_role] || a.admin_role}
                 </span>
               </TableCell>
               <TableCell className="text-sm">{a.contact_number || '—'}</TableCell>
@@ -343,7 +378,7 @@ const AdminManagement = () => {
         </div>
         <Button onClick={() => { setEditingAdmin(null); setFormData(emptyForm); setFormOpen(true); }}>
           <Plus className="w-4 h-4 mr-2" />
-          Add Admin
+          Add Account
         </Button>
       </div>
 
@@ -357,7 +392,7 @@ const AdminManagement = () => {
         />
       </div>
 
-      {/* Active Admins */}
+      {/* Active accounts */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="border-b bg-muted/30">
           <CardTitle className="text-lg">Staff Accounts ({filtered.length})</CardTitle>
@@ -377,7 +412,7 @@ const AdminManagement = () => {
         </CardContent>
       </Card>
 
-      {/* Archived */}
+      {/* Archived accounts */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="cursor-pointer bg-muted/30" onClick={() => setShowArchived(!showArchived)}>
           <div className="flex items-center justify-between">
@@ -407,7 +442,7 @@ const AdminManagement = () => {
         )}
       </Card>
 
-      {/* Add/Edit Dialog */}
+      {/* Add / Edit dialog */}
       <Dialog open={formOpen} onOpenChange={(open) => { if (!open) { setFormOpen(false); setEditingAdmin(null); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -464,7 +499,12 @@ const AdminManagement = () => {
             </div>
             <div className="col-span-2 space-y-2">
               <Label>Role *</Label>
-              <Select value={formData.admin_role} onValueChange={(val) => setFormData({ ...formData, admin_role: val })}>
+              <Select
+                value={formData.admin_role}
+                onValueChange={(val) => setFormData({ ...formData, admin_role: val })}
+                // Lock role when editing — moving between tables is not supported
+                disabled={!!editingAdmin}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select role" />
                 </SelectTrigger>
@@ -474,6 +514,9 @@ const AdminManagement = () => {
                   <SelectItem value="cashier">Cashier</SelectItem>
                 </SelectContent>
               </Select>
+              {editingAdmin && (
+                <p className="text-xs text-muted-foreground">Role cannot be changed after account creation.</p>
+              )}
             </div>
           </div>
           <DialogFooter>
@@ -488,7 +531,7 @@ const AdminManagement = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Archive Confirmation */}
+      {/* Archive confirmation */}
       <AlertDialog open={!!archiveTarget} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -498,8 +541,7 @@ const AdminManagement = () => {
             <AlertDialogDescription>
               {archiveTarget?.is_archived
                 ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active list again.`
-                : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from the active list but data will be kept.`
-              }
+                : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from the active list but data will be kept.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -516,7 +558,7 @@ const AdminManagement = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Duplicate Alert */}
+      {/* Duplicate alert */}
       <AlertDialog open={duplicateAlertOpen} onOpenChange={setDuplicateAlertOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
