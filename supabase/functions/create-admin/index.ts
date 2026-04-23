@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { decode } from 'https://deno.land/x/djwt@v3.0.2/mod.ts';
 
 const ALLOWED_ORIGINS = [
   'https://document-request.vercel.app',
@@ -28,6 +29,12 @@ function generatePassword(lastName: string, contactNumber: string): string {
   return `${cleanedLastName}${last4}`;
 }
 
+const respond = (corsHeaders: Record<string, string>, body: object, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
@@ -38,49 +45,51 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const anonKey        = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseAdmin  = createClient(supabaseUrl, serviceRoleKey);
 
+    // ── Auth check ────────────────────────────────────────────────────────────
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Unauthorized: missing Bearer token' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return respond(corsHeaders, { error: 'Unauthorized: missing Bearer token' }, 401);
     }
 
     const token = authHeader.replace('Bearer ', '').trim();
-
-    const supabaseUser = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-
-    const { data: { user: caller }, error: authError } = await supabaseUser.auth.getUser();
-    if (authError || !caller) {
-      return new Response(JSON.stringify({ error: 'Unauthorized: Invalid or expired session.' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    if (token.split('.').length !== 3) {
+      return respond(corsHeaders, { error: 'Unauthorized: invalid token format' }, 401);
     }
 
+    // Decode JWT to get user ID without needing getUser()
+    let callerId: string;
+    try {
+      const [_header, payload] = decode(token);
+      const p = payload as Record<string, any>;
+      callerId = p.sub as string;
+      if (!callerId) throw new Error('No sub in token');
+
+      // Check token expiry
+      if (p.exp && p.exp < Math.floor(Date.now() / 1000)) {
+        return respond(corsHeaders, { error: 'Unauthorized: token expired' }, 401);
+      }
+    } catch (e: any) {
+      return respond(corsHeaders, { error: `Unauthorized: ${e.message}` }, 401);
+    }
+
+    // ── Check caller is admin ─────────────────────────────────────────────────
     const { data: roleData } = await supabaseAdmin
       .from('user_roles')
       .select('role')
-      .eq('user_id', caller.id)
+      .eq('user_id', callerId)
       .eq('role', 'admin')
       .single();
 
     if (!roleData) {
-      return new Response(JSON.stringify({ error: 'Forbidden: admin only' }), {
-        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return respond(corsHeaders, { error: 'Forbidden: admin only' }, 403);
     }
 
+    // ── Parse body ────────────────────────────────────────────────────────────
     let body: any;
     try { body = await req.json(); }
-    catch {
-      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    catch { return respond(corsHeaders, { error: 'Invalid JSON body' }, 400); }
 
     const email          = toStr(body.email).toLowerCase();
     const first_name     = toStr(body.first_name);
@@ -91,57 +100,63 @@ Deno.serve(async (req) => {
 
     const validRoles = ['admin', 'programhead', 'cashier'];
     if (!validRoles.includes(admin_role)) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid role. Must be admin, programhead, or cashier.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
+      return respond(corsHeaders, { error: 'Invalid role. Must be admin, programhead, or cashier.' }, 400);
     }
 
-    if (!email)          return new Response(JSON.stringify({ error: 'email is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!first_name)     return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!last_name)      return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!contact_number) return new Response(JSON.stringify({ error: 'contact_number is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!email)          return respond(corsHeaders, { error: 'email is required' }, 400);
+    if (!first_name)     return respond(corsHeaders, { error: 'first_name is required' }, 400);
+    if (!last_name)      return respond(corsHeaders, { error: 'last_name is required' }, 400);
+    if (!contact_number) return respond(corsHeaders, { error: 'contact_number is required' }, 400);
 
-    // ✅ Check if email already exists in auth
-    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
-    const emailExists = existingUsers?.users?.some(u => u.email?.toLowerCase() === email);
+    // ── Check for duplicate email ─────────────────────────────────────────────
+    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+    const emailExists = existingUsers?.users?.some((u) => u.email?.toLowerCase() === email);
     if (emailExists) {
-      return new Response(
-        JSON.stringify({ error: `A user with email "${email}" already exists.` }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
+      return respond(corsHeaders, {
+        error: `A user with email "${email}" already exists.`,
+      }, 400);
     }
 
     const password = generatePassword(last_name, contact_number);
-    console.log('Creating account for:', email, 'role:', admin_role);
+    console.log('Creating account for:', email, '| role:', admin_role, '| password:', password);
 
-    // ✅ Create auth user with role 'admin' for all staff types
+    // ── Create auth user ──────────────────────────────────────────────────────
     const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
       user_metadata: {
-        role: 'admin',
-        username: email,
+        role:           admin_role,
+        username:       email,
         first_name,
         last_name,
-        middle_name: middle_name || null,
+        middle_name:    middle_name || null,
         contact_number: contact_number || null,
       },
     });
 
     if (createError) {
       console.error('createUser error:', createError.message);
-      return new Response(JSON.stringify({ error: createError.message }), {
-        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return respond(corsHeaders, { error: createError.message }, 400);
     }
 
-    const newUserId = newUser.user!.id;
-    await new Promise(r => setTimeout(r, 800));
+    const userId = newUser.user!.id;
+    console.log('Auth user created:', userId);
+
+    // ── Ensure user_roles row exists ──────────────────────────────────────────
+    const { error: roleInsertError } = await supabaseAdmin
+      .from('user_roles')
+      .upsert({ user_id: userId, role: admin_role }, { onConflict: 'user_id,role' });
+
+    if (roleInsertError) {
+      console.error('user_roles insert error:', roleInsertError.message);
+    }
+
+    // ── Wait for trigger, then insert profile row if missing ──────────────────
+    await new Promise((r) => setTimeout(r, 600));
 
     const profileData = {
-      user_id:        newUserId,
+      user_id:        userId,
       username:       email,
       first_name,
       last_name,
@@ -150,50 +165,46 @@ Deno.serve(async (req) => {
       is_archived:    false,
     };
 
-    // ✅ Route to correct table based on role
     if (admin_role === 'cashier') {
-      const { error: profileError } = await supabaseAdmin
-        .from('cashiers')
-        .insert(profileData);
-      if (profileError) {
-        console.error('cashiers insert error:', profileError.message);
-        return new Response(
-          JSON.stringify({ error: `Profile insert failed: ${profileError.message}` }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
+      const { data: existing } = await supabaseAdmin
+        .from('cashiers').select('id').eq('user_id', userId).single();
+      if (!existing) {
+        const { error: e } = await supabaseAdmin
+          .from('cashiers').insert({ ...profileData, admin_role: 'cashier' });
+        if (e) return respond(corsHeaders, { error: `cashiers insert failed: ${e.message}` }, 500);
+        console.log('Cashier row inserted for:', email);
       }
+
     } else if (admin_role === 'programhead') {
-      const { error: profileError } = await supabaseAdmin
-        .from('programheads')
-        .insert(profileData);
-      if (profileError) {
-        console.error('programheads insert error:', profileError.message);
-        return new Response(
-          JSON.stringify({ error: `Profile insert failed: ${profileError.message}` }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
+      const { data: existing } = await supabaseAdmin
+        .from('programheads').select('id').eq('user_id', userId).single();
+      if (!existing) {
+        const { error: e } = await supabaseAdmin
+          .from('programheads').insert({ ...profileData, admin_role: 'programhead' });
+        if (e) return respond(corsHeaders, { error: `programheads insert failed: ${e.message}` }, 500);
+        console.log('Programhead row inserted for:', email);
       }
+
     } else {
-      // admin → goes to admins table
-      const { error: profileError } = await supabaseAdmin
-        .from('admins')
-        .insert({ ...profileData, admin_role: 'admin' });
-      if (profileError) {
-        console.error('admins insert error:', profileError.message);
-        return new Response(
-          JSON.stringify({ error: `Profile insert failed: ${profileError.message}` }),
-          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
+      const { data: existing } = await supabaseAdmin
+        .from('admins').select('id').eq('user_id', userId).single();
+      if (!existing) {
+        const { error: e } = await supabaseAdmin
+          .from('admins').insert({ ...profileData, admin_role: 'admin' });
+        if (e) return respond(corsHeaders, { error: `admins insert failed: ${e.message}` }, 500);
+        console.log('Admin row inserted for:', email);
       }
     }
 
-    // Send welcome email
+    console.log(`${admin_role} profile confirmed for:`, email);
+
+    // ── Send welcome email ────────────────────────────────────────────────────
     try {
       const roleLabel = admin_role === 'programhead' ? 'Program Head'
         : admin_role === 'cashier' ? 'Cashier'
         : 'Administrator';
 
-      await fetch(`${supabaseUrl}/functions/v1/send-gmail`, {
+      const emailRes = await fetch(`${supabaseUrl}/functions/v1/send-gmail`, {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
@@ -210,23 +221,25 @@ Deno.serve(async (req) => {
           section:     '',
         }),
       });
+
+      if (!emailRes.ok) {
+        const d = await emailRes.json();
+        console.error('Email failed:', JSON.stringify(d));
+      } else {
+        console.log('Welcome email sent to:', email);
+      }
     } catch (emailErr: any) {
       console.error('Email error (non-critical):', emailErr.message);
     }
 
-    return new Response(JSON.stringify({
+    return respond(corsHeaders, {
       success: true,
-      user_id: newUserId,
+      user_id: userId,
       message: `${admin_role} account created for ${first_name} ${last_name}.`,
-    }), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
 
   } catch (err: any) {
     console.error('Unexpected error:', err);
-    return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return respond(corsHeaders, { error: err.message || 'Internal server error' }, 500);
   }
 });

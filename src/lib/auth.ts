@@ -13,7 +13,7 @@ export interface UserProfile {
   section: string | null;
   avatarUrl: string | null;
   studentId: string | null;
-  role: 'student' | 'admin';
+  role: 'student' | 'admin' | 'cashier' | 'programhead';
 }
 
 export interface AuthUser {
@@ -28,7 +28,6 @@ export interface AuthSession {
 
 // Fetch user profile from the database based on role
 export async function fetchUserProfile(userId: string): Promise<UserProfile | null> {
-  // Check role first
   const { data: roleData } = await supabase
     .from('user_roles')
     .select('role')
@@ -37,7 +36,7 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
 
   if (!roleData) return null;
 
-  const role = roleData.role as 'student' | 'admin';
+  const role = roleData.role as UserProfile['role'];
 
   if (role === 'admin') {
     const { data } = await supabase
@@ -58,13 +57,15 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
       contactNumber: data.contact_number,
       gradeLevel: null,
       section: null,
-      avatarUrl: data.avatar_url,
+      avatarUrl: data.avatar_url ?? null,
       studentId: null,
       role: 'admin',
     };
-  } else {
+  }
+
+  if (role === 'cashier') {
     const { data } = await supabase
-      .from('students')
+      .from('cashiers')
       .select('*')
       .eq('user_id', userId)
       .single();
@@ -79,16 +80,71 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
       lastName: data.last_name,
       middleName: data.middle_name,
       contactNumber: data.contact_number,
-      gradeLevel: data.grade_level,
-      section: data.section,
-      avatarUrl: data.avatar_url,
-      studentId: (data as any).student_id || null,
-      role: 'student',
+      gradeLevel: null,
+      section: null,
+      avatarUrl: data.avatar_url ?? null,
+      studentId: null,
+      role: 'cashier',
     };
   }
+
+  if (role === 'programhead') {
+    const { data } = await supabase
+      .from('programheads')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    if (!data) return null;
+
+    return {
+      id: data.id,
+      user_id: data.user_id,
+      username: data.username,
+      firstName: data.first_name,
+      lastName: data.last_name,
+      middleName: data.middle_name,
+      contactNumber: data.contact_number,
+      gradeLevel: null,
+      section: null,
+      avatarUrl: data.avatar_url ?? null,
+      studentId: null,
+      role: 'programhead',
+    };
+  }
+
+  // student
+  const { data } = await supabase
+    .from('students')
+    .select('*')
+    .eq('user_id', userId)
+    .single();
+
+  if (!data) return null;
+
+  return {
+    id: data.id,
+    user_id: data.user_id,
+    username: data.username,
+    firstName: data.first_name,
+    lastName: data.last_name,
+    middleName: data.middle_name,
+    contactNumber: data.contact_number,
+    gradeLevel: data.grade_level,
+    section: data.section,
+    avatarUrl: data.avatar_url ?? null,
+    studentId: (data as any).student_id || null,
+    role: 'student',
+  };
 }
 
 // Get redirect path based on role
-export function getRedirectPath(role: 'student' | 'admin'): string {
-  return role === 'admin' ? '/admin/dashboard' : '/student/dashboard';
+export function getRedirectPath(role: UserProfile['role']): string {
+  switch (role) {
+    case 'admin':      return '/admin/dashboard';
+    case 'cashier':    return '/admin/payments';
+    case 'programhead': return '/admin/students';
+    case 'student':    return '/student/dashboard';
+    default:           return '/';
+  }
 }
