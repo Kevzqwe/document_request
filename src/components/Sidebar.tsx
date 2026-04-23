@@ -7,34 +7,62 @@ import { cn } from '@/lib/utils';
 import { profileStorage } from '@/lib/profileStorage';
 
 const Sidebar = () => {
-  const { profile, user, logout } = useAuth();
+  const { profile, logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
-  // Use profile data directly from AuthContext (database source of truth)
   const displayAvatarUrl = profileStorage.getAvatarUrl(profile?.avatarUrl || null, profile?.firstName);
 
   const studentNavItems = [
-    { to: '/student/dashboard', icon: Home, label: 'Dashboard' },
-    { to: '/student/document-request', icon: FileText, label: 'Document Request' },
-    { to: '/student/request-history', icon: History, label: 'Request History' },
-    { to: '/student/account', icon: User, label: 'Account' },
+    { to: '/student/dashboard',        icon: Home,        label: 'Dashboard' },
+    { to: '/student/document-request', icon: FileText,    label: 'Document Request' },
+    { to: '/student/request-history',  icon: History,     label: 'Request History' },
+    { to: '/student/account',          icon: User,        label: 'Account' },
   ];
 
   const adminNavItems = [
-    { to: '/admin/dashboard', icon: Home, label: 'Dashboard' },
-    { to: '/admin/request-documents', icon: FileText, label: 'Request Documents' },
-    { to: '/admin/payments', icon: CreditCard, label: 'Payments' },
-    { to: '/admin/messages', icon: MessageSquare, label: 'Messages' },
-    { to: '/admin/analytics', icon: BarChart3, label: 'Analytics' },
-    { to: '/admin/students', icon: Users, label: 'Students' },
-    { to: '/admin/admins', icon: ShieldCheck, label: 'Admin Management' }, // ✅ ADDED
-    { to: '/admin/account', icon: User, label: 'Account' },
+    { to: '/admin/dashboard',          icon: Home,        label: 'Dashboard' },
+    { to: '/admin/request-documents',  icon: FileText,    label: 'Request Documents' },
+    { to: '/admin/payments',           icon: CreditCard,  label: 'Payments' },
+    { to: '/admin/messages',           icon: MessageSquare, label: 'Messages' },
+    { to: '/admin/analytics',          icon: BarChart3,   label: 'Analytics' },
+    { to: '/admin/students',           icon: Users,       label: 'Students' },
+    { to: '/admin/admins',             icon: ShieldCheck, label: 'Admin Management' },
+    { to: '/admin/account',            icon: User,        label: 'Account' },
   ];
 
-  const navItems = profile?.role === 'admin' ? adminNavItems : studentNavItems;
+  // Cashier: Payments only
+  const cashierNavItems = [
+    { to: '/admin/payments', icon: CreditCard, label: 'Payments' },
+  ];
+
+  // Program Head: Students only
+  const programheadNavItems = [
+    { to: '/admin/students', icon: Users, label: 'Students' },
+  ];
+
+  const getNavItems = () => {
+    switch (profile?.role) {
+      case 'admin':       return adminNavItems;
+      case 'cashier':     return cashierNavItems;
+      case 'programhead': return programheadNavItems;
+      default:            return studentNavItems;
+    }
+  };
+
+  const navItems = getNavItems();
+
+  // Role label displayed under the name
+  const getRoleLabel = () => {
+    switch (profile?.role) {
+      case 'admin':       return 'Admin';
+      case 'cashier':     return 'Cashier';
+      case 'programhead': return 'Program Head';
+      case 'student':     return 'Student';
+      default:            return profile?.role ?? '';
+    }
+  };
 
   const SidebarContent = () => (
     <>
-
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-4">
           <img
@@ -46,7 +74,7 @@ const Sidebar = () => {
             <h3 className="font-semibold text-sidebar-foreground truncate">
               {profile?.firstName} {profile?.lastName}
             </h3>
-            <p className="text-sm text-sidebar-foreground/70 capitalize">{profile?.role}</p>
+            <p className="text-sm text-sidebar-foreground/70">{getRoleLabel()}</p>
           </div>
         </div>
       </div>
