@@ -12,31 +12,35 @@ const Sidebar = () => {
   const displayAvatarUrl = profileStorage.getAvatarUrl(profile?.avatarUrl || null, profile?.firstName);
 
   const studentNavItems = [
-    { to: '/student/dashboard',        icon: Home,        label: 'Dashboard' },
-    { to: '/student/document-request', icon: FileText,    label: 'Document Request' },
-    { to: '/student/request-history',  icon: History,     label: 'Request History' },
-    { to: '/student/account',          icon: User,        label: 'Account' },
+    { to: '/student/dashboard',        icon: Home,          label: 'Dashboard' },
+    { to: '/student/document-request', icon: FileText,      label: 'Document Request' },
+    { to: '/student/request-history',  icon: History,       label: 'Request History' },
+    { to: '/student/account',          icon: User,          label: 'Account' },
   ];
 
   const adminNavItems = [
-    { to: '/admin/dashboard',          icon: Home,        label: 'Dashboard' },
-    { to: '/admin/request-documents',  icon: FileText,    label: 'Request Documents' },
-    { to: '/admin/payments',           icon: CreditCard,  label: 'Payments' },
-    { to: '/admin/messages',           icon: MessageSquare, label: 'Messages' },
-    { to: '/admin/analytics',          icon: BarChart3,   label: 'Analytics' },
-    { to: '/admin/students',           icon: Users,       label: 'Students' },
-    { to: '/admin/admins',             icon: ShieldCheck, label: 'Admin Management' },
-    { to: '/admin/account',            icon: User,        label: 'Account' },
+    { to: '/admin/dashboard',         icon: Home,          label: 'Dashboard' },
+    { to: '/admin/request-documents', icon: FileText,      label: 'Request Documents' },
+    { to: '/admin/payments',          icon: CreditCard,    label: 'Payments' },
+    { to: '/admin/messages',          icon: MessageSquare, label: 'Messages' },
+    { to: '/admin/analytics',         icon: BarChart3,     label: 'Analytics' },
+    { to: '/admin/students',          icon: Users,         label: 'Students' },
+    { to: '/admin/admins',            icon: ShieldCheck,   label: 'Admin Management' },
+    { to: '/admin/account',           icon: User,          label: 'Account' },
   ];
 
-  // Cashier: Payments only
+  // Cashier: Dashboard, Payments, Account
   const cashierNavItems = [
-    { to: '/admin/payments', icon: CreditCard, label: 'Payments' },
+    { to: '/admin/dashboard', icon: Home,       label: 'Dashboard' },
+    { to: '/admin/payments',  icon: CreditCard, label: 'Payments' },
+    { to: '/admin/account',   icon: User,       label: 'Account' },
   ];
 
-  // Program Head: Students only
+  // Program Head: Dashboard, Students, Account
   const programheadNavItems = [
-    { to: '/admin/students', icon: Users, label: 'Students' },
+    { to: '/admin/dashboard', icon: Home,  label: 'Dashboard' },
+    { to: '/admin/students',  icon: Users, label: 'Students' },
+    { to: '/admin/account',   icon: User,  label: 'Account' },
   ];
 
   const getNavItems = () => {
@@ -48,9 +52,6 @@ const Sidebar = () => {
     }
   };
 
-  const navItems = getNavItems();
-
-  // Role label displayed under the name
   const getRoleLabel = () => {
     switch (profile?.role) {
       case 'admin':       return 'Admin';
@@ -60,6 +61,8 @@ const Sidebar = () => {
       default:            return profile?.role ?? '';
     }
   };
+
+  const navItems = getNavItems();
 
   const SidebarContent = () => (
     <>
