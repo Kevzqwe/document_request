@@ -31,9 +31,6 @@ import type { UserProfile } from "./lib/auth";
 
 const queryClient = new QueryClient();
 
-// ── Role-based route guard ────────────────────────────────────────────────────
-// allowedRoles: which roles can access this route
-// If the user's role is not in the list, redirect them to their own home page
 interface RoleGuardProps {
   allowedRoles: UserProfile['role'][];
   children: React.ReactNode;
@@ -42,13 +39,17 @@ interface RoleGuardProps {
 const RoleGuard = ({ allowedRoles, children }: RoleGuardProps) => {
   const { profile, isLoading, isAuthenticated } = useAuth();
 
-  // Still loading — render nothing to avoid flash
-  if (isLoading) return null;
+  // Show spinner while auth loads — never return null (causes blank page)
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
-  // Not logged in — send to login
   if (!isAuthenticated || !profile) return <Navigate to="/" replace />;
 
-  // Role not allowed — redirect to their own home page
   if (!allowedRoles.includes(profile.role)) {
     return <Navigate to={getRedirectPath(profile.role)} replace />;
   }
@@ -56,7 +57,6 @@ const RoleGuard = ({ allowedRoles, children }: RoleGuardProps) => {
   return <>{children}</>;
 };
 
-// ── App ───────────────────────────────────────────────────────────────────────
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -69,10 +69,9 @@ const App = () => (
             <Route path="/" element={<Login />} />
             <Route path="/login" element={<Navigate to="/" replace />} />
 
-            {/* All authenticated routes share Layout */}
             <Route element={<Layout />}>
 
-              {/* ── Student-only routes ────────────────────────────────── */}
+              {/* ── Student-only ───────────────────────────────────────── */}
               <Route path="/student/dashboard" element={
                 <RoleGuard allowedRoles={['student']}>
                   <Dashboard />
@@ -94,12 +93,19 @@ const App = () => (
                 </RoleGuard>
               } />
 
-              {/* ── Admin-only routes ──────────────────────────────────── */}
+              {/* ── Shared: admin + cashier + programhead ──────────────── */}
               <Route path="/admin/dashboard" element={
-                <RoleGuard allowedRoles={['admin']}>
+                <RoleGuard allowedRoles={['admin', 'cashier', 'programhead']}>
                   <AdminDashboard />
                 </RoleGuard>
               } />
+              <Route path="/admin/account" element={
+                <RoleGuard allowedRoles={['admin', 'cashier', 'programhead']}>
+                  <AdminAccount />
+                </RoleGuard>
+              } />
+
+              {/* ── Admin-only ─────────────────────────────────────────── */}
               <Route path="/admin/request-documents" element={
                 <RoleGuard allowedRoles={['admin']}>
                   <AdminRequestDocuments />
@@ -115,25 +121,20 @@ const App = () => (
                   <AdminAnalytics />
                 </RoleGuard>
               } />
-              <Route path="/admin/account" element={
-                <RoleGuard allowedRoles={['admin']}>
-                  <AdminAccount />
-                </RoleGuard>
-              } />
               <Route path="/admin/admins" element={
                 <RoleGuard allowedRoles={['admin']}>
                   <AdminManagement />
                 </RoleGuard>
               } />
 
-              {/* ── Cashier-only routes ────────────────────────────────── */}
+              {/* ── Admin + Cashier ────────────────────────────────────── */}
               <Route path="/admin/payments" element={
                 <RoleGuard allowedRoles={['admin', 'cashier']}>
                   <AdminPayments />
                 </RoleGuard>
               } />
 
-              {/* ── Program Head-only routes ───────────────────────────── */}
+              {/* ── Admin + Program Head ───────────────────────────────── */}
               <Route path="/admin/students" element={
                 <RoleGuard allowedRoles={['admin', 'programhead']}>
                   <AdminStudentManagement />

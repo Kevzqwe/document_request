@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,13 +50,8 @@ interface StudentFormData {
 }
 
 const emptyForm: StudentFormData = {
-  username: '',
-  first_name: '',
-  last_name: '',
-  middle_name: '',
-  contact_number: '',
-  grade_level: '',
-  section: '',
+  username: '', first_name: '', last_name: '',
+  middle_name: '', contact_number: '', grade_level: '', section: '',
 };
 
 const invokeWithAuth = async (fnName: string, body: object) => {
@@ -94,19 +90,24 @@ const invokeWithAuth = async (fnName: string, body: object) => {
 
 const AdminStudentManagement = () => {
   const { toast } = useToast();
+  const { profile } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [students, setStudents] = useState<StudentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingStudent, setEditingStudent] = useState<StudentRow | null>(null);
-  const [formData, setFormData] = useState<StudentFormData>(emptyForm);
-  const [saving, setSaving] = useState(false);
-  const [archiveTarget, setArchiveTarget] = useState<StudentRow | null>(null);
-  const [archiving, setArchiving] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importPreview, setImportPreview] = useState<StudentFormData[]>([]);
+
+  // Programhead can view but cannot add/edit/archive students
+  const isAdmin = profile?.role === 'admin';
+
+  const [students, setStudents]               = useState<StudentRow[]>([]);
+  const [loading, setLoading]                 = useState(true);
+  const [search, setSearch]                   = useState('');
+  const [formOpen, setFormOpen]               = useState(false);
+  const [editingStudent, setEditingStudent]   = useState<StudentRow | null>(null);
+  const [formData, setFormData]               = useState<StudentFormData>(emptyForm);
+  const [saving, setSaving]                   = useState(false);
+  const [archiveTarget, setArchiveTarget]     = useState<StudentRow | null>(null);
+  const [archiving, setArchiving]             = useState(false);
+  const [showArchived, setShowArchived]       = useState(false);
+  const [importing, setImporting]             = useState(false);
+  const [importPreview, setImportPreview]     = useState<StudentFormData[]>([]);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [invalidFormatOpen, setInvalidFormatOpen] = useState(false);
   const [invalidFormatMessage, setInvalidFormatMessage] = useState('');
@@ -128,9 +129,12 @@ const AdminStudentManagement = () => {
     setLoading(false);
   };
 
-  useEffect(() => { fetchStudents(); }, []);
+  // Stable useEffect — only runs once on mount
+  useEffect(() => {
+    fetchStudents();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const activeStudents = students.filter(s => !s.is_archived);
+  const activeStudents   = students.filter(s => !s.is_archived);
   const archivedStudents = students.filter(s => s.is_archived);
 
   const filtered = activeStudents.filter((s) => {
@@ -156,11 +160,10 @@ const AdminStudentManagement = () => {
   });
 
   const checkDuplicate = (email: string): string | null => {
-    const existingByEmail = activeStudents.find(s => s.username.toLowerCase() === email.toLowerCase());
-    if (existingByEmail) {
-      return `A student with email "${email}" already exists (${existingByEmail.first_name} ${existingByEmail.last_name}).`;
-    }
-    return null;
+    const existing = activeStudents.find(s => s.username.toLowerCase() === email.toLowerCase());
+    return existing
+      ? `A student with email "${email}" already exists (${existing.first_name} ${existing.last_name}).`
+      : null;
   };
 
   const handleAddStudent = async () => {
@@ -173,11 +176,8 @@ const AdminStudentManagement = () => {
       return;
     }
     const dupMessage = checkDuplicate(formData.username);
-    if (dupMessage) {
-      setDuplicateAlertMessage(dupMessage);
-      setDuplicateAlertOpen(true);
-      return;
-    }
+    if (dupMessage) { setDuplicateAlertMessage(dupMessage); setDuplicateAlertOpen(true); return; }
+
     setSaving(true);
     const { error } = await invokeWithAuth('create-student', {
       email: formData.username,
@@ -190,14 +190,14 @@ const AdminStudentManagement = () => {
     });
     if (error) {
       const errMsg = error.message || 'Failed to create student.';
-      if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('duplicate') || errMsg.toLowerCase().includes('exists')) {
-        setDuplicateAlertMessage(`This student already exists in the database. ${errMsg}`);
+      if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('exists')) {
+        setDuplicateAlertMessage(`This student already exists. ${errMsg}`);
         setDuplicateAlertOpen(true);
       } else {
         toast({ title: 'Error', description: errMsg, variant: 'destructive' });
       }
     } else {
-      toast({ title: 'Student Created', description: `${formData.first_name} ${formData.last_name} has been added. Login details sent via email.` });
+      toast({ title: 'Student Created', description: `${formData.first_name} ${formData.last_name} has been added.` });
       setFormOpen(false);
       setFormData(emptyForm);
       await fetchStudents();
@@ -259,20 +259,10 @@ const AdminStudentManagement = () => {
   const openEdit = (s: StudentRow) => {
     setEditingStudent(s);
     setFormData({
-      username: s.username,
-      first_name: s.first_name,
-      last_name: s.last_name,
-      middle_name: s.middle_name || '',
-      contact_number: s.contact_number || '',
-      grade_level: s.grade_level || '',
-      section: s.section || '',
+      username: s.username, first_name: s.first_name, last_name: s.last_name,
+      middle_name: s.middle_name || '', contact_number: s.contact_number || '',
+      grade_level: s.grade_level || '', section: s.section || '',
     });
-    setFormOpen(true);
-  };
-
-  const openAdd = () => {
-    setEditingStudent(null);
-    setFormData(emptyForm);
     setFormOpen(true);
   };
 
@@ -283,12 +273,11 @@ const AdminStudentManagement = () => {
     contact_number: ['contact_number', 'Contact Number', 'ContactNumber', 'Phone', 'phone'],
   };
 
-  const validateExcelHeaders = (headers: string[]): { valid: boolean; missing: string[] } => {
-    const trimmedHeaders = headers.map(h => h.trim());
+  const validateExcelHeaders = (headers: string[]) => {
+    const trimmed = headers.map(h => h.trim());
     const missing: string[] = [];
     for (const [key, variants] of Object.entries(ACCEPTED_HEADER_VARIANTS)) {
-      const found = variants.some(v => trimmedHeaders.includes(v));
-      if (!found) missing.push(key.replace('_', ' '));
+      if (!variants.some(v => trimmed.includes(v))) missing.push(key.replace('_', ' '));
     }
     return { valid: missing.length === 0, missing };
   };
@@ -303,16 +292,13 @@ const AdminStudentManagement = () => {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows: Record<string, string>[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
         if (rows.length === 0) {
-          setInvalidFormatMessage('The file is empty. Please upload a file with student data.');
+          setInvalidFormatMessage('The file is empty.');
           setInvalidFormatOpen(true);
           return;
         }
-        const headers = Object.keys(rows[0]);
-        const { valid, missing } = validateExcelHeaders(headers);
+        const { valid, missing } = validateExcelHeaders(Object.keys(rows[0]));
         if (!valid) {
-          setInvalidFormatMessage(
-            `Invalid Excel format. The following required columns are missing:\n• ${missing.join('\n• ')}\n\nRequired columns: Email, First Name, Last Name, Contact Number\nOptional columns: Middle Name, Grade Level, Section`
-          );
+          setInvalidFormatMessage(`Missing columns:\n• ${missing.join('\n• ')}`);
           setInvalidFormatOpen(true);
           return;
         }
@@ -321,33 +307,27 @@ const AdminStudentManagement = () => {
           first_name: r['first_name'] || r['First Name'] || r['FirstName'] || '',
           last_name: r['last_name'] || r['Last Name'] || r['LastName'] || '',
           middle_name: r['middle_name'] || r['Middle Name'] || r['MiddleName'] || '',
-          contact_number: String(r['contact_number'] || r['Contact Number'] || r['ContactNumber'] || r['Phone'] || r['phone'] || ''),
-          grade_level: r['grade_level'] || r['Grade Level'] || r['GradeLevel'] || r['Grade'] || '',
+          contact_number: String(r['contact_number'] || r['Contact Number'] || r['Phone'] || r['phone'] || ''),
+          grade_level: r['grade_level'] || r['Grade Level'] || r['Grade'] || '',
           section: r['section'] || r['Section'] || '',
         }));
         const duplicates: string[] = [];
         const uniqueRows: StudentFormData[] = [];
-        const seenEmails = new Set<string>();
+        const seen = new Set<string>();
         for (const row of mapped) {
           if (!row.username || !row.first_name || !row.last_name) continue;
           const email = row.username.toLowerCase();
-          if (seenEmails.has(email)) {
-            duplicates.push(`Duplicate in file: ${row.username}`);
-            continue;
-          }
-          seenEmails.add(email);
+          if (seen.has(email)) { duplicates.push(`Duplicate in file: ${row.username}`); continue; }
+          seen.add(email);
           const dupMsg = checkDuplicate(row.username);
-          if (dupMsg) {
-            duplicates.push(dupMsg);
-          } else {
-            uniqueRows.push(row);
-          }
+          if (dupMsg) duplicates.push(dupMsg);
+          else uniqueRows.push(row);
         }
         setImportDuplicates(duplicates);
         setImportPreview(uniqueRows);
         setImportDialogOpen(true);
       } catch {
-        setInvalidFormatMessage('Could not parse the file. Please make sure it is a valid Excel (.xlsx, .xls) or CSV file.');
+        setInvalidFormatMessage('Could not parse the file.');
         setInvalidFormatOpen(true);
       }
     };
@@ -357,28 +337,19 @@ const AdminStudentManagement = () => {
 
   const handleImportConfirm = async () => {
     setImporting(true);
-    let success = 0;
-    let failed = 0;
+    let success = 0, failed = 0;
     for (const row of importPreview) {
-      if (!row.username || !row.first_name || !row.last_name || !row.contact_number) {
-        failed++;
-        continue;
-      }
+      if (!row.username || !row.first_name || !row.last_name || !row.contact_number) { failed++; continue; }
       const { error } = await invokeWithAuth('create-student', {
-        email: row.username,
-        first_name: row.first_name,
-        last_name: row.last_name,
-        middle_name: row.middle_name || null,
-        contact_number: row.contact_number,
-        grade_level: row.grade_level || null,
-        section: row.section || null,
+        email: row.username, first_name: row.first_name, last_name: row.last_name,
+        middle_name: row.middle_name || null, contact_number: row.contact_number,
+        grade_level: row.grade_level || null, section: row.section || null,
       });
-      if (error) failed++;
-      else success++;
+      if (error) failed++; else success++;
     }
     toast({
       title: 'Import Complete',
-      description: `${success} students imported. Login details sent via email${failed > 0 ? `, ${failed} failed` : ''}.`,
+      description: `${success} students imported${failed > 0 ? `, ${failed} failed` : ''}.`,
       variant: failed > 0 && success === 0 ? 'destructive' : 'default',
     });
     setImportDialogOpen(false);
@@ -388,7 +359,7 @@ const AdminStudentManagement = () => {
     setImporting(false);
   };
 
-  const StudentTable = ({ data, isArchived = false }: { data: StudentRow[], isArchived?: boolean }) => (
+  const StudentTable = ({ data, isArchived = false }: { data: StudentRow[]; isArchived?: boolean }) => (
     <div className="overflow-x-auto">
       <Table>
         <TableHeader>
@@ -399,7 +370,7 @@ const AdminStudentManagement = () => {
             <TableHead>Grade & Section</TableHead>
             <TableHead>Contact</TableHead>
             {isArchived && <TableHead>Archived On</TableHead>}
-            <TableHead className="text-right">Actions</TableHead>
+            {isAdmin && <TableHead className="text-right">Actions</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -410,33 +381,32 @@ const AdminStudentManagement = () => {
                 {s.first_name} {s.middle_name ? s.middle_name + ' ' : ''}{s.last_name}
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">{s.username}</TableCell>
-              <TableCell className="text-sm">
-                {s.grade_level || '—'} {s.section ? `/ ${s.section}` : ''}
-              </TableCell>
+              <TableCell className="text-sm">{s.grade_level || '—'} {s.section ? `/ ${s.section}` : ''}</TableCell>
               <TableCell className="text-sm">{s.contact_number || '—'}</TableCell>
               {isArchived && (
                 <TableCell className="text-sm text-muted-foreground">
                   {s.archived_at ? new Date(s.archived_at).toLocaleDateString() : '—'}
                 </TableCell>
               )}
-              <TableCell className="text-right">
-                <div className="flex justify-end gap-1">
-                  {!isArchived && (
-                    <Button variant="ghost" size="icon" onClick={() => openEdit(s)}>
-                      <Edit2 className="w-4 h-4" />
+              {/* Actions — admin only */}
+              {isAdmin && (
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    {!isArchived && (
+                      <Button variant="ghost" size="icon" onClick={() => openEdit(s)}>
+                        <Edit2 className="w-4 h-4" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost" size="icon"
+                      className={isArchived ? 'text-green-600 hover:text-green-700' : 'text-amber-500 hover:text-amber-600'}
+                      onClick={() => setArchiveTarget({ ...s, is_archived: isArchived })}
+                    >
+                      {isArchived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
                     </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={isArchived ? 'text-green-600 hover:text-green-700' : 'text-amber-500 hover:text-amber-600'}
-                    onClick={() => setArchiveTarget({ ...s, is_archived: isArchived })}
-                    title={isArchived ? 'Restore' : 'Archive'}
-                  >
-                    {isArchived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
-                  </Button>
-                </div>
-              </TableCell>
+                  </div>
+                </TableCell>
+              )}
             </TableRow>
           ))}
         </TableBody>
@@ -451,17 +421,18 @@ const AdminStudentManagement = () => {
           <Users className="w-7 h-7 text-primary" />
           <h1 className="text-2xl font-bold">Student Management</h1>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
-            <Upload className="w-4 h-4 mr-2" />
-            Import Excel
-          </Button>
-          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFileChange} className="hidden" />
-          <Button onClick={openAdd}>
-            <Plus className="w-4 h-4 mr-2" />
-            Add Student
-          </Button>
-        </div>
+        {/* Import/Add — admin only */}
+        {isAdmin && (
+          <div className="flex gap-2 flex-wrap">
+            <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+              <Upload className="w-4 h-4 mr-2" />Import Excel
+            </Button>
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFileChange} className="hidden" />
+            <Button onClick={() => { setEditingStudent(null); setFormData(emptyForm); setFormOpen(true); }}>
+              <Plus className="w-4 h-4 mr-2" />Add Student
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="relative max-w-md">
@@ -524,100 +495,93 @@ const AdminStudentManagement = () => {
         )}
       </Card>
 
-      {/* Add/Edit Dialog */}
-      <Dialog open={formOpen} onOpenChange={(open) => { if (!open) { setFormOpen(false); setEditingStudent(null); } }}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingStudent ? 'Edit Student' : 'Add New Student'}</DialogTitle>
-            <DialogDescription>
-              {editingStudent ? 'Update the student profile information below.' : 'Fill in the details to create a new student account.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid grid-cols-2 gap-4 py-4">
-            {!editingStudent && (
-              <div className="col-span-2 space-y-2">
-                <Label>Email *</Label>
-                <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="student@email.com" />
+      {/* Add/Edit Dialog — admin only */}
+      {isAdmin && (
+        <Dialog open={formOpen} onOpenChange={(open) => { if (!open) { setFormOpen(false); setEditingStudent(null); } }}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>{editingStudent ? 'Edit Student' : 'Add New Student'}</DialogTitle>
+              <DialogDescription>
+                {editingStudent ? 'Update the student profile information below.' : 'Fill in the details to create a new student account.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-2 gap-4 py-4">
+              {!editingStudent && (
+                <div className="col-span-2 space-y-2">
+                  <Label>Email *</Label>
+                  <Input value={formData.username} onChange={(e) => setFormData({ ...formData, username: e.target.value })} placeholder="student@email.com" />
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label>First Name *</Label>
+                <Input value={formData.first_name} onChange={(e) => setFormData({ ...formData, first_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
               </div>
-            )}
-            <div className="space-y-2">
-              <Label>First Name *</Label>
-              <Input value={formData.first_name} onChange={(e) => setFormData({ ...formData, first_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
+              <div className="space-y-2">
+                <Label>Last Name *</Label>
+                <Input value={formData.last_name} onChange={(e) => setFormData({ ...formData, last_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Middle Name</Label>
+                <Input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Contact Number *</Label>
+                <Input value={formData.contact_number} onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Grade Level</Label>
+                <Input value={formData.grade_level} onChange={(e) => setFormData({ ...formData, grade_level: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Section</Label>
+                <Input value={formData.section} onChange={(e) => setFormData({ ...formData, section: e.target.value })} />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Last Name *</Label>
-              <Input value={formData.last_name} onChange={(e) => setFormData({ ...formData, last_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
-            </div>
-            <div className="space-y-2">
-              <Label>Middle Name</Label>
-              <Input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
-            </div>
-            <div className="space-y-2">
-              <Label>Contact Number *</Label>
-              <Input
-                value={formData.contact_number}
-                onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Grade Level</Label>
-              <Input value={formData.grade_level} onChange={(e) => setFormData({ ...formData, grade_level: e.target.value })} />
-            </div>
-            <div className="space-y-2">
-              <Label>Section</Label>
-              <Input value={formData.section} onChange={(e) => setFormData({ ...formData, section: e.target.value })} />
-            </div>
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline">Cancel</Button>
-            </DialogClose>
-            <Button onClick={editingStudent ? handleEditStudent : handleAddStudent} disabled={saving}>
-              {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {editingStudent ? 'Save Changes' : 'Create Student'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <DialogFooter>
+              <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+              <Button onClick={editingStudent ? handleEditStudent : handleAddStudent} disabled={saving}>
+                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {editingStudent ? 'Save Changes' : 'Create Student'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
-      {/* Archive Confirmation */}
-      <AlertDialog open={!!archiveTarget} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {archiveTarget?.is_archived ? 'Restore Student' : 'Archive Student'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {archiveTarget?.is_archived
-                ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active students list again.`
-                : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will be hidden from the active list but data will be kept.`
-              }
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => handleArchiveStudent(archiveTarget?.is_archived ? 'unarchive' : 'archive')}
-              disabled={archiving}
-              className={archiveTarget?.is_archived ? 'bg-green-600 hover:bg-green-700' : 'bg-amber-500 hover:bg-amber-600'}
-            >
-              {archiving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {archiveTarget?.is_archived ? 'Restore' : 'Archive'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Archive Confirmation — admin only */}
+      {isAdmin && (
+        <AlertDialog open={!!archiveTarget} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{archiveTarget?.is_archived ? 'Restore Student' : 'Archive Student'}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {archiveTarget?.is_archived
+                  ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}?`
+                  : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? Data will be kept.`}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => handleArchiveStudent(archiveTarget?.is_archived ? 'unarchive' : 'archive')}
+                disabled={archiving}
+                className={archiveTarget?.is_archived ? 'bg-green-600 hover:bg-green-700' : 'bg-amber-500 hover:bg-amber-600'}
+              >
+                {archiving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {archiveTarget?.is_archived ? 'Restore' : 'Archive'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
 
       <AlertDialog open={invalidFormatOpen} onOpenChange={setInvalidFormatOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="w-5 h-5" />
-              Invalid Excel Format
+              <AlertTriangle className="w-5 h-5" />Invalid Excel Format
             </AlertDialogTitle>
-            <AlertDialogDescription className="whitespace-pre-line">
-              {invalidFormatMessage}
-            </AlertDialogDescription>
+            <AlertDialogDescription className="whitespace-pre-line">{invalidFormatMessage}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => setInvalidFormatOpen(false)}>OK</AlertDialogAction>
@@ -629,8 +593,7 @@ const AdminStudentManagement = () => {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-amber-600">
-              <AlertTriangle className="w-5 h-5" />
-              Duplicate Student Found
+              <AlertTriangle className="w-5 h-5" />Duplicate Student Found
             </AlertDialogTitle>
             <AlertDialogDescription>{duplicateAlertMessage}</AlertDialogDescription>
           </AlertDialogHeader>
@@ -640,86 +603,69 @@ const AdminStudentManagement = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!open && !importing) { setImportDialogOpen(false); setImportPreview([]); setImportDuplicates([]); } }}>
-        <DialogContent className="max-w-3xl max-h-[80vh]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <FileSpreadsheet className="w-5 h-5" />
-              Import Preview — {importPreview.length} students
-            </DialogTitle>
-            <DialogDescription>
-              Review the students below before confirming the import.
-            </DialogDescription>
-          </DialogHeader>
-
-          {importDuplicates.length > 0 && (
-            <div className="border border-amber-300 bg-amber-50 dark:bg-amber-950/30 rounded-md p-3 space-y-2">
-              <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-medium text-sm">
-                <AlertTriangle className="w-4 h-4" />
-                {importDuplicates.length} duplicate(s) found and will be skipped:
+      {isAdmin && (
+        <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!open && !importing) { setImportDialogOpen(false); setImportPreview([]); setImportDuplicates([]); } }}>
+          <DialogContent className="max-w-3xl max-h-[80vh]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5" />Import Preview — {importPreview.length} students
+              </DialogTitle>
+              <DialogDescription>Review the students below before confirming the import.</DialogDescription>
+            </DialogHeader>
+            {importDuplicates.length > 0 && (
+              <div className="border border-amber-300 bg-amber-50 dark:bg-amber-950/30 rounded-md p-3 space-y-2">
+                <div className="flex items-center gap-2 text-amber-700 font-medium text-sm">
+                  <AlertTriangle className="w-4 h-4" />{importDuplicates.length} duplicate(s) will be skipped:
+                </div>
+                <ul className="text-sm text-amber-600 space-y-1 max-h-24 overflow-auto">
+                  {importDuplicates.map((d, i) => <li key={i}>• {d}</li>)}
+                </ul>
               </div>
-              <ul className="text-sm text-amber-600 dark:text-amber-400 space-y-1 max-h-24 overflow-auto">
-                {importDuplicates.map((d, i) => (
-                  <li key={i} className="flex items-center gap-1">
-                    <span className="text-amber-500">•</span> {d}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {importPreview.length > 0 ? (
-            <>
-              <div className="overflow-auto max-h-[50vh] border rounded-md">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>#</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Contact</TableHead>
-                      <TableHead>Grade</TableHead>
-                      <TableHead>Section</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {importPreview.map((r, i) => (
-                      <TableRow key={i} className={!r.username || !r.first_name || !r.last_name || !r.contact_number ? 'bg-destructive/10' : ''}>
-                        <TableCell>{i + 1}</TableCell>
-                        <TableCell className="text-sm">{r.username || <span className="text-destructive">Missing</span>}</TableCell>
-                        <TableCell className="text-sm">{r.first_name} {r.last_name}</TableCell>
-                        <TableCell className="text-sm">{r.contact_number || <span className="text-destructive">Missing</span>}</TableCell>
-                        <TableCell className="text-sm">{r.grade_level || '—'}</TableCell>
-                        <TableCell className="text-sm">{r.section || '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Rows highlighted in red are missing required fields and will be skipped.
-              </p>
-            </>
-          ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-amber-500" />
-              All students in this file already exist in the database. Nothing to import.
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setImportDialogOpen(false); setImportPreview([]); setImportDuplicates([]); }} disabled={importing}>
-              Cancel
-            </Button>
-            {importPreview.length > 0 && (
-              <Button onClick={handleImportConfirm} disabled={importing}>
-                {importing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {importing ? 'Importing...' : `Import ${importPreview.length} Students`}
-              </Button>
             )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            {importPreview.length > 0 ? (
+              <>
+                <div className="overflow-auto max-h-[50vh] border rounded-md">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>#</TableHead><TableHead>Email</TableHead><TableHead>Name</TableHead>
+                        <TableHead>Contact</TableHead><TableHead>Grade</TableHead><TableHead>Section</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {importPreview.map((r, i) => (
+                        <TableRow key={i} className={!r.username || !r.first_name || !r.last_name || !r.contact_number ? 'bg-destructive/10' : ''}>
+                          <TableCell>{i + 1}</TableCell>
+                          <TableCell className="text-sm">{r.username || <span className="text-destructive">Missing</span>}</TableCell>
+                          <TableCell className="text-sm">{r.first_name} {r.last_name}</TableCell>
+                          <TableCell className="text-sm">{r.contact_number || <span className="text-destructive">Missing</span>}</TableCell>
+                          <TableCell className="text-sm">{r.grade_level || '—'}</TableCell>
+                          <TableCell className="text-sm">{r.section || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <p className="text-sm text-muted-foreground">Rows in red are missing required fields and will be skipped.</p>
+              </>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-amber-500" />
+                All students already exist. Nothing to import.
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setImportDialogOpen(false); setImportPreview([]); setImportDuplicates([]); }} disabled={importing}>Cancel</Button>
+              {importPreview.length > 0 && (
+                <Button onClick={handleImportConfirm} disabled={importing}>
+                  {importing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {importing ? 'Importing...' : `Import ${importPreview.length} Students`}
+                </Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 };
