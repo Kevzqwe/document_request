@@ -22,13 +22,14 @@ interface Announcement {
 const AdminDashboard = () => {
   const { profile, user } = useAuth();
   const { toast } = useToast();
-  const [isEditingWelcome, setIsEditingWelcome] = useState(false);
-  const [welcomeMessage, setWelcomeMessage] = useState('Welcome back');
-  const [isCreatingAnnouncement, setIsCreatingAnnouncement] = useState(false);
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [loading, setLoading] = useState(true);
+  const isAdmin = profile?.role === 'admin';
 
-  const [newAnnouncement, setNewAnnouncement] = useState({ title: '', content: '' });
+  const [isEditingWelcome, setIsEditingWelcome]       = useState(false);
+  const [welcomeMessage, setWelcomeMessage]           = useState('Welcome back');
+  const [isCreatingAnnouncement, setIsCreatingAnnouncement] = useState(false);
+  const [announcements, setAnnouncements]             = useState<Announcement[]>([]);
+  const [loading, setLoading]                         = useState(true);
+  const [newAnnouncement, setNewAnnouncement]         = useState({ title: '', content: '' });
 
   const fetchAnnouncements = async () => {
     const { data, error } = await supabase
@@ -37,11 +38,11 @@ const AdminDashboard = () => {
       .order('created_at', { ascending: false });
 
     if (!error && data) {
-      setAnnouncements(data.map(a => ({
-        id: a.id,
-        title: a.title,
+      setAnnouncements(data.map((a) => ({
+        id:      a.id,
+        title:   a.title,
         content: a.content,
-        date: a.created_at,
+        date:    a.created_at,
       })));
     }
     setLoading(false);
@@ -66,14 +67,9 @@ const AdminDashboard = () => {
 
     const { error } = await supabase
       .from('announcements')
-      .insert({
-        title: newAnnouncement.title,
-        content: newAnnouncement.content,
-        created_by: user?.id || null,
-      });
+      .insert({ title: newAnnouncement.title, content: newAnnouncement.content, created_by: user?.id || null });
 
     if (error) {
-      console.error('Error creating announcement:', error);
       toast({ title: 'Error', description: 'Failed to create announcement.', variant: 'destructive' });
       return;
     }
@@ -86,21 +82,23 @@ const AdminDashboard = () => {
 
   const handleDeleteAnnouncement = async (id: string) => {
     const { error } = await supabase.from('announcements').delete().eq('id', id);
-    if (error) {
-      console.error('Error deleting announcement:', error);
-      return;
-    }
+    if (error) return;
     await fetchAnnouncements();
     toast({ title: 'Announcement Deleted', description: 'The announcement has been removed.' });
   };
 
   return (
     <div className="space-y-6">
+      {/* Welcome banner */}
       <div className="bg-gradient-to-r from-primary to-primary-light rounded-2xl p-8 text-primary-foreground shadow-lg">
         <div className="flex justify-between items-start">
           <div className="flex-1">
             {isEditingWelcome ? (
-              <Input value={welcomeMessage} onChange={(e) => setWelcomeMessage(e.target.value)} className="text-3xl font-bold mb-2 bg-background/10 border-primary-foreground/30 text-primary-foreground" />
+              <Input
+                value={welcomeMessage}
+                onChange={(e) => setWelcomeMessage(e.target.value)}
+                className="text-3xl font-bold mb-2 bg-background/10 border-primary-foreground/30 text-primary-foreground"
+              />
             ) : (
               <h1 className="text-3xl font-bold mb-2">{welcomeMessage}, {profile?.firstName}!</h1>
             )}
@@ -109,19 +107,27 @@ const AdminDashboard = () => {
               <p className="text-lg">{currentDate}</p>
             </div>
           </div>
-          {!isEditingWelcome ? (
-            <Button onClick={() => setIsEditingWelcome(true)} variant="secondary" size="sm">
-              <Edit2 className="w-4 h-4 mr-2" />Edit
-            </Button>
-          ) : (
-            <div className="flex gap-2">
-              <Button onClick={handleSaveWelcome} size="sm" variant="secondary"><Save className="w-4 h-4 mr-2" />Save</Button>
-              <Button onClick={() => setIsEditingWelcome(false)} size="sm" variant="outline"><X className="w-4 h-4" /></Button>
-            </div>
+          {/* Only admin can edit welcome message */}
+          {isAdmin && (
+            !isEditingWelcome ? (
+              <Button onClick={() => setIsEditingWelcome(true)} variant="secondary" size="sm">
+                <Edit2 className="w-4 h-4 mr-2" />Edit
+              </Button>
+            ) : (
+              <div className="flex gap-2">
+                <Button onClick={handleSaveWelcome} size="sm" variant="secondary">
+                  <Save className="w-4 h-4 mr-2" />Save
+                </Button>
+                <Button onClick={() => setIsEditingWelcome(false)} size="sm" variant="outline">
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            )
           )}
         </div>
       </div>
 
+      {/* Announcements */}
       <Card className="border-2">
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -129,24 +135,39 @@ const AdminDashboard = () => {
               <Bell className="w-5 h-5 text-primary" />
               <CardTitle>Announcements</CardTitle>
             </div>
-            <Button onClick={() => setIsCreatingAnnouncement(true)} size="sm">
-              <Plus className="w-4 h-4 mr-2" />Create Announcement
-            </Button>
+            {/* Only admin can create announcements */}
+            {isAdmin && (
+              <Button onClick={() => setIsCreatingAnnouncement(true)} size="sm">
+                <Plus className="w-4 h-4 mr-2" />Create Announcement
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {isCreatingAnnouncement && (
+          {/* Create form — admin only */}
+          {isAdmin && isCreatingAnnouncement && (
             <div className="p-4 bg-muted rounded-lg border-2 space-y-4">
               <div>
                 <Label>Title</Label>
-                <Input value={newAnnouncement.title} onChange={(e) => setNewAnnouncement({ ...newAnnouncement, title: e.target.value })} placeholder="Announcement title" />
+                <Input
+                  value={newAnnouncement.title}
+                  onChange={(e) => setNewAnnouncement({ ...newAnnouncement, title: e.target.value })}
+                  placeholder="Announcement title"
+                />
               </div>
               <div>
                 <Label>Content</Label>
-                <Textarea value={newAnnouncement.content} onChange={(e) => setNewAnnouncement({ ...newAnnouncement, content: e.target.value })} placeholder="Announcement content" rows={3} />
+                <Textarea
+                  value={newAnnouncement.content}
+                  onChange={(e) => setNewAnnouncement({ ...newAnnouncement, content: e.target.value })}
+                  placeholder="Announcement content"
+                  rows={3}
+                />
               </div>
               <div className="flex gap-2">
-                <Button onClick={handleCreateAnnouncement}><Save className="w-4 h-4 mr-2" />Create</Button>
+                <Button onClick={handleCreateAnnouncement}>
+                  <Save className="w-4 h-4 mr-2" />Create
+                </Button>
                 <Button variant="outline" onClick={() => setIsCreatingAnnouncement(false)}>Cancel</Button>
               </div>
             </div>
@@ -157,17 +178,27 @@ const AdminDashboard = () => {
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
             </div>
           ) : announcements.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">No announcements yet. Create one to get started.</div>
+            <div className="text-center py-8 text-muted-foreground">No announcements yet.</div>
           ) : (
             announcements.map((announcement) => (
               <div key={announcement.id} className="p-4 rounded-lg border-2 border-primary/30 bg-primary/5">
                 <div className="flex justify-between items-start mb-2">
                   <h3 className="font-semibold text-foreground flex-1">{announcement.title}</h3>
-                  <div className="flex gap-2 ml-4">
-                    <span className="text-xs text-muted-foreground">{new Date(announcement.date).toLocaleDateString()}</span>
-                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => handleDeleteAnnouncement(announcement.id)}>
-                      <Trash2 className="w-4 h-4 text-destructive" />
-                    </Button>
+                  <div className="flex gap-2 ml-4 items-center">
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(announcement.date).toLocaleDateString()}
+                    </span>
+                    {/* Only admin can delete announcements */}
+                    {isAdmin && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0"
+                        onClick={() => handleDeleteAnnouncement(announcement.id)}
+                      >
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    )}
                   </div>
                 </div>
                 <p className="text-sm text-foreground/80">{announcement.content}</p>
