@@ -7,53 +7,48 @@ import { cn } from '@/lib/utils';
 import { profileStorage } from '@/lib/profileStorage';
 
 const Sidebar = () => {
-  const { profile, logout } = useAuth();
+  const { profile, user, logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const [displayAvatarUrl, setDisplayAvatarUrl] = useState('');
+  const [displayName, setDisplayName] = useState({ firstName: '', lastName: '' });
 
-  // ✅ Derive avatar directly from profile (auto-updates when refreshProfile() is called)
-  // Fall back to localStorage only if profile has no avatarUrl yet
-  const getDisplayAvatar = () => {
+  // ✅ Use user.id (auth UUID) not profile.id (table row UUID)
+  const resolveAvatar = () => {
+    // 1. Prefer profile.avatarUrl from DB (most reliable after refresh)
     if (profile?.avatarUrl) return profile.avatarUrl;
-    if (profile?.id) {
-      const stored = profileStorage.getByUserId(profile.id);
+    // 2. Fall back to localStorage using auth user ID
+    if (user?.id) {
+      const stored = profileStorage.getByUserId(user.id);
       if (stored?.avatarUrl) return stored.avatarUrl;
     }
+    // 3. Generate initials avatar
     return profileStorage.getAvatarUrl(null, profile?.firstName);
   };
 
-  // ✅ Force re-render when profile.avatarUrl changes by tracking it in state
-  const [displayAvatarUrl, setDisplayAvatarUrl] = useState(getDisplayAvatar());
-  const [displayName, setDisplayName] = useState({
-    firstName: profile?.firstName || '',
-    lastName:  profile?.lastName  || '',
-  });
-
-  // ✅ This runs every time profile changes in AuthContext (after refreshProfile())
+  // ✅ Update whenever profile or user changes (covers page refresh)
   useEffect(() => {
-    setDisplayAvatarUrl(getDisplayAvatar());
+    setDisplayAvatarUrl(resolveAvatar());
     setDisplayName({
       firstName: profile?.firstName || '',
       lastName:  profile?.lastName  || '',
     });
-  }, [
-    profile?.avatarUrl,
-    profile?.firstName,
-    profile?.lastName,
-    profile?.id,
-  ]);
+  }, [profile?.avatarUrl, profile?.firstName, profile?.lastName, user?.id]);
 
-  // ✅ Also listen to custom events for instant update before refreshProfile completes
+  // ✅ Listen for instant updates from Account page (no refresh needed)
   useEffect(() => {
     const handleAvatarUpdate = (e: Event) => {
       const detail = (e as CustomEvent)?.detail;
       if (detail?.avatarUrl) {
         setDisplayAvatarUrl(detail.avatarUrl);
+      } else if (user?.id) {
+        const stored = profileStorage.getByUserId(user.id);
+        if (stored?.avatarUrl) setDisplayAvatarUrl(stored.avatarUrl);
       }
     };
 
     const handleProfileUpdate = () => {
-      if (!profile?.id) return;
-      const stored = profileStorage.getByUserId(profile.id);
+      if (!user?.id) return;
+      const stored = profileStorage.getByUserId(user.id);
       if (stored) {
         if (stored.avatarUrl) setDisplayAvatarUrl(stored.avatarUrl);
         setDisplayName({
@@ -69,7 +64,7 @@ const Sidebar = () => {
       window.removeEventListener('avatarUpdated', handleAvatarUpdate);
       window.removeEventListener('profileUpdated', handleProfileUpdate);
     };
-  }, [profile?.id]);
+  }, [user?.id, profile?.firstName, profile?.lastName]);
 
   const studentNavItems = [
     { to: '/student/dashboard',        icon: Home,          label: 'Dashboard' },
@@ -126,15 +121,13 @@ const Sidebar = () => {
     <>
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-4">
-          {/* ✅ key forces React to remount img when URL changes */}
           <img
             key={displayAvatarUrl}
             src={displayAvatarUrl}
             alt={displayName.firstName}
             className="w-16 h-16 rounded-full border-2 border-sidebar-primary object-cover"
             onError={(e) => {
-              // fallback to initials avatar if image fails
-              (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${displayName.firstName}+${displayName.lastName}&background=16a34a&color=fff&size=64`;
+              (e.target as HTMLImageElement).src = profileStorage.getAvatarUrl(null, displayName.firstName);
             }}
           />
           <div className="flex-1 min-w-0">

@@ -38,6 +38,7 @@ const AdminAccount = () => {
   const [isSaving,          setIsSaving]           = useState(false);
   const [isUploadingAvatar, setIsUploadingAvatar]  = useState(false);
   const [avatarUrl,         setAvatarUrl]          = useState<string | null>(null);
+  const [avatarTimestamp,   setAvatarTimestamp]    = useState(Date.now());
   const [editedInfo, setEditedInfo] = useState({
     firstName:     '',
     middleName:    '',
@@ -49,22 +50,33 @@ const AdminAccount = () => {
   useEffect(() => {
     if (!user?.id) return;
     const stored = profileStorage.getByUserId(user.id);
+    // ✅ Prefer DB value (profile.avatarUrl), then localStorage, then null
     const url = profile?.avatarUrl ?? stored?.avatarUrl ?? null;
     setAvatarUrl(url);
+    setAvatarTimestamp(Date.now()); // force image refresh
     setEditedInfo({
       firstName:     profile?.firstName     || '',
       middleName:    profile?.middleName    || '',
       lastName:      profile?.lastName      || '',
       contactNumber: profile?.contactNumber || '',
     });
-  }, [user?.id, profile]);
+  }, [user?.id, profile?.avatarUrl, profile?.firstName, profile?.lastName]);
 
   // ✅ Listen for avatar updates dispatched from this page or elsewhere
   useEffect(() => {
-    const handleAvatarUpdate = () => {
+    const handleAvatarUpdate = (e: Event) => {
       if (!user?.id) return;
-      const stored = profileStorage.getByUserId(user.id);
-      if (stored?.avatarUrl) setAvatarUrl(stored.avatarUrl);
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.avatarUrl) {
+        setAvatarUrl(detail.avatarUrl);
+        setAvatarTimestamp(Date.now());
+      } else {
+        const stored = profileStorage.getByUserId(user.id);
+        if (stored?.avatarUrl) {
+          setAvatarUrl(stored.avatarUrl);
+          setAvatarTimestamp(Date.now());
+        }
+      }
     };
     window.addEventListener('avatarUpdated', handleAvatarUpdate);
     return () => window.removeEventListener('avatarUpdated', handleAvatarUpdate);
@@ -94,8 +106,20 @@ const AdminAccount = () => {
     return () => { supabase.removeChannel(channel); };
   }, [user?.id, profile?.role]);
 
-  const displayAvatarUrl = profileStorage.getAvatarUrl(avatarUrl, profile?.firstName);
   const getTable = () => ROLE_TABLE[profile?.role ?? ''] ?? 'admins';
+
+  // ✅ Add cache-busting timestamp to force browser to reload image
+  const getRawAvatarUrl = () => {
+    const base = avatarUrl ?? profile?.avatarUrl ?? null;
+    if (!base) return profileStorage.getAvatarUrl(null, profile?.firstName);
+    // Add timestamp only for Supabase Storage URLs to bust cache
+    if (base.includes('supabase') && base.includes('storage')) {
+      return `${base}?t=${avatarTimestamp}`;
+    }
+    return base;
+  };
+
+  const displayAvatarUrl = getRawAvatarUrl();
 
   const handleLogout = () => {
     setIsLoggingOut(true);
@@ -109,13 +133,26 @@ const AdminAccount = () => {
     try {
       const newUrl = await profileStorage.uploadAvatar(user.id, file);
       setAvatarUrl(newUrl);
-      await supabase.from(getTable()).update({ avatar_url: newUrl }).eq('user_id', user.id);
+      setAvatarTimestamp(Date.now());
+
+      // ✅ Save to correct table based on role
+      const { error } = await supabase
+        .from(getTable())
+        .update({ avatar_url: newUrl })
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('Avatar DB save error:', error.message);
+      }
+
       profileStorage.save({ userId: user.id, avatarUrl: newUrl, ...editedInfo });
       await refreshProfile();
-      // ✅ Broadcast so sidebar updates immediately
+
+      // ✅ Broadcast with URL so sidebar updates immediately
       window.dispatchEvent(new CustomEvent('avatarUpdated', { detail: { avatarUrl: newUrl } }));
       toast({ title: 'Photo Updated', description: 'Your profile photo has been saved.' });
-    } catch {
+    } catch (err: any) {
+      console.error('Upload error:', err);
       toast({ title: 'Upload Failed', description: 'Failed to upload photo.', variant: 'destructive' });
     } finally {
       setIsUploadingAvatar(false);
@@ -142,7 +179,6 @@ const AdminAccount = () => {
     }
     profileStorage.save({ userId: user.id, avatarUrl, ...editedInfo });
     await refreshProfile();
-    // ✅ Broadcast profile update for sidebar
     window.dispatchEvent(new Event('profileUpdated'));
     toast({ title: 'Profile Updated', description: 'Your information has been successfully saved.' });
     setIsEditing(false);
@@ -165,8 +201,9 @@ const AdminAccount = () => {
     { label: 'Last Name',      value: editedInfo.lastName,      field: 'lastName',      icon: User,   editable: true  },
     { label: 'Contact Number', value: editedInfo.contactNumber, field: 'contactNumber', icon: Phone,  editable: true  },
     { label: 'Username',       value: profile?.username ?? '',  field: 'username',      icon: Mail,   editable: false },
-    { label: 'Role',           value: ROLE_LABELS[profile?.role ?? ''] ?? profile?.role ?? '',
-                                                                 field: 'role',          icon: Shield, editable: false },
+    { label: 'Role',
+      value: ROLE_LABELS[profile?.role ?? ''] ?? profile?.role ?? '',
+      field: 'role', icon: Shield, editable: false },
   ];
 
   return (
@@ -176,10 +213,15 @@ const AdminAccount = () => {
           <div className="flex items-center gap-4 justify-between flex-wrap">
             <div className="flex items-center gap-4">
               <div className="relative group">
+                {/* ✅ key forces React to remount img when URL changes */}
                 <img
+                  key={`${avatarUrl}-${avatarTimestamp}`}
                   src={displayAvatarUrl}
                   alt={profile?.firstName}
                   className="w-20 h-20 rounded-full border-4 border-primary shadow-lg object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = profileStorage.getAvatarUrl(null, profile?.firstName);
+                  }}
                 />
                 {isEditing && (
                   <button
@@ -239,13 +281,14 @@ const AdminAccount = () => {
                     if (['firstName', 'middleName', 'lastName'].includes(item.field)) {
                       v = v.replace(/[^a-zA-Z\s]/g, '');
                     } else if (item.field === 'contactNumber') {
-                      // ✅ Limit to 11 digits only
                       v = v.replace(/[^0-9]/g, '').slice(0, 11);
                     }
                     setEditedInfo({ ...editedInfo, [item.field]: v });
                   }}
                   maxLength={item.field === 'contactNumber' ? 11 : undefined}
-                  className={isEditing && item.editable ? 'border-2 font-medium' : 'bg-muted border-2 font-medium cursor-not-allowed'}
+                  className={isEditing && item.editable
+                    ? 'border-2 font-medium'
+                    : 'bg-muted border-2 font-medium cursor-not-allowed'}
                 />
               </div>
             ))}
