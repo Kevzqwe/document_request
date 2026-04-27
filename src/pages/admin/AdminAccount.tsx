@@ -9,7 +9,6 @@ import { useToast } from '@/hooks/use-toast';
 import { profileStorage } from '@/lib/profileStorage';
 import { supabase } from '@/integrations/supabase/client';
 
-// ── Route each role to its own table ─────────────────────────────────────────
 const ROLE_TABLE: Record<string, 'admins' | 'cashiers' | 'programheads'> = {
   admin:       'admins',
   cashier:     'cashiers',
@@ -34,22 +33,24 @@ const AdminAccount = () => {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [isLoggingOut,     setIsLoggingOut]     = useState(false);
-  const [isEditing,        setIsEditing]         = useState(false);
-  const [isSaving,         setIsSaving]          = useState(false);
-  const [isUploadingAvatar,setIsUploadingAvatar] = useState(false);
-  const [avatarUrl,        setAvatarUrl]         = useState<string | null>(null);
+  const [isLoggingOut,      setIsLoggingOut]      = useState(false);
+  const [isEditing,         setIsEditing]          = useState(false);
+  const [isSaving,          setIsSaving]           = useState(false);
+  const [isUploadingAvatar, setIsUploadingAvatar]  = useState(false);
+  const [avatarUrl,         setAvatarUrl]          = useState<string | null>(null);
   const [editedInfo, setEditedInfo] = useState({
-    firstName:     profile?.firstName     || '',
-    middleName:    profile?.middleName    || '',
-    lastName:      profile?.lastName      || '',
-    contactNumber: profile?.contactNumber || '',
+    firstName:     '',
+    middleName:    '',
+    lastName:      '',
+    contactNumber: '',
   });
 
-  // Sync form when profile loads
+  // ✅ Sync form + avatar whenever profile loads or changes
   useEffect(() => {
     if (!user?.id) return;
-    setAvatarUrl(profile?.avatarUrl ?? profileStorage.getByUserId(user.id)?.avatarUrl ?? null);
+    const stored = profileStorage.getByUserId(user.id);
+    const url = profile?.avatarUrl ?? stored?.avatarUrl ?? null;
+    setAvatarUrl(url);
     setEditedInfo({
       firstName:     profile?.firstName     || '',
       middleName:    profile?.middleName    || '',
@@ -58,9 +59,42 @@ const AdminAccount = () => {
     });
   }, [user?.id, profile]);
 
-  const displayAvatarUrl = profileStorage.getAvatarUrl(avatarUrl, profile?.firstName);
+  // ✅ Listen for avatar updates dispatched from this page or elsewhere
+  useEffect(() => {
+    const handleAvatarUpdate = () => {
+      if (!user?.id) return;
+      const stored = profileStorage.getByUserId(user.id);
+      if (stored?.avatarUrl) setAvatarUrl(stored.avatarUrl);
+    };
+    window.addEventListener('avatarUpdated', handleAvatarUpdate);
+    return () => window.removeEventListener('avatarUpdated', handleAvatarUpdate);
+  }, [user?.id]);
 
-  // Resolve the correct table for the current user's role
+  // ✅ Real-time subscription to profile table changes
+  useEffect(() => {
+    if (!user?.id || !profile?.role) return;
+    const table = ROLE_TABLE[profile.role] ?? 'admins';
+
+    const channel = supabase
+      .channel(`${table}-account-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table,
+          filter: `user_id=eq.${user.id}`,
+        },
+        async () => {
+          await refreshProfile();
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, profile?.role]);
+
+  const displayAvatarUrl = profileStorage.getAvatarUrl(avatarUrl, profile?.firstName);
   const getTable = () => ROLE_TABLE[profile?.role ?? ''] ?? 'admins';
 
   const handleLogout = () => {
@@ -78,7 +112,8 @@ const AdminAccount = () => {
       await supabase.from(getTable()).update({ avatar_url: newUrl }).eq('user_id', user.id);
       profileStorage.save({ userId: user.id, avatarUrl: newUrl, ...editedInfo });
       await refreshProfile();
-      window.dispatchEvent(new Event('avatarUpdated'));
+      // ✅ Broadcast so sidebar updates immediately
+      window.dispatchEvent(new CustomEvent('avatarUpdated', { detail: { avatarUrl: newUrl } }));
       toast({ title: 'Photo Updated', description: 'Your profile photo has been saved.' });
     } catch {
       toast({ title: 'Upload Failed', description: 'Failed to upload photo.', variant: 'destructive' });
@@ -107,6 +142,8 @@ const AdminAccount = () => {
     }
     profileStorage.save({ userId: user.id, avatarUrl, ...editedInfo });
     await refreshProfile();
+    // ✅ Broadcast profile update for sidebar
+    window.dispatchEvent(new Event('profileUpdated'));
     toast({ title: 'Profile Updated', description: 'Your information has been successfully saved.' });
     setIsEditing(false);
     setIsSaving(false);
@@ -199,10 +236,15 @@ const AdminAccount = () => {
                   onChange={(e) => {
                     if (!isEditing || !item.editable) return;
                     let v = e.target.value;
-                    if (['firstName','middleName','lastName'].includes(item.field)) v = v.replace(/[^a-zA-Z\s]/g,'');
-                    else if (item.field === 'contactNumber') v = v.replace(/[^0-9]/g,'');
+                    if (['firstName', 'middleName', 'lastName'].includes(item.field)) {
+                      v = v.replace(/[^a-zA-Z\s]/g, '');
+                    } else if (item.field === 'contactNumber') {
+                      // ✅ Limit to 11 digits only
+                      v = v.replace(/[^0-9]/g, '').slice(0, 11);
+                    }
                     setEditedInfo({ ...editedInfo, [item.field]: v });
                   }}
+                  maxLength={item.field === 'contactNumber' ? 11 : undefined}
                   className={isEditing && item.editable ? 'border-2 font-medium' : 'bg-muted border-2 font-medium cursor-not-allowed'}
                 />
               </div>

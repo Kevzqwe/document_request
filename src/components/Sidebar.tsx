@@ -2,14 +2,62 @@ import { Home, FileText, History, User, LogOut, MessageSquare, BarChart3, Chevro
 import { NavLink } from '@/components/NavLink';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { profileStorage } from '@/lib/profileStorage';
 
 const Sidebar = () => {
   const { profile, logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
-  const displayAvatarUrl = profileStorage.getAvatarUrl(profile?.avatarUrl || null, profile?.firstName);
+
+  // ✅ Local avatar state so it updates immediately without page refresh
+  const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(null);
+  const [localName, setLocalName] = useState({ firstName: '', lastName: '' });
+
+  // ✅ Sync from profile on load
+  useEffect(() => {
+    if (!profile) return;
+    const stored = profile.id ? profileStorage.getByUserId(profile.id) : null;
+    setLocalAvatarUrl(profile.avatarUrl ?? stored?.avatarUrl ?? null);
+    setLocalName({
+      firstName: profile.firstName || '',
+      lastName:  profile.lastName  || '',
+    });
+  }, [profile]);
+
+  // ✅ Listen for avatar updates dispatched from Account page
+  useEffect(() => {
+    const handleAvatarUpdate = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.avatarUrl) {
+        setLocalAvatarUrl(detail.avatarUrl);
+      } else if (profile?.id) {
+        const stored = profileStorage.getByUserId(profile.id);
+        if (stored?.avatarUrl) setLocalAvatarUrl(stored.avatarUrl);
+      }
+    };
+
+    const handleProfileUpdate = () => {
+      if (!profile?.id) return;
+      const stored = profileStorage.getByUserId(profile.id);
+      if (stored) {
+        if (stored.avatarUrl) setLocalAvatarUrl(stored.avatarUrl);
+        setLocalName({
+          firstName: stored.firstName || profile.firstName || '',
+          lastName:  stored.lastName  || profile.lastName  || '',
+        });
+      }
+    };
+
+    window.addEventListener('avatarUpdated', handleAvatarUpdate);
+    window.addEventListener('profileUpdated', handleProfileUpdate);
+    return () => {
+      window.removeEventListener('avatarUpdated', handleAvatarUpdate);
+      window.removeEventListener('profileUpdated', handleProfileUpdate);
+    };
+  }, [profile]);
+
+  const displayAvatarUrl = profileStorage.getAvatarUrl(localAvatarUrl, localName.firstName || profile?.firstName);
 
   const studentNavItems = [
     { to: '/student/dashboard',        icon: Home,          label: 'Dashboard' },
@@ -29,14 +77,12 @@ const Sidebar = () => {
     { to: '/admin/account',           icon: User,          label: 'Account' },
   ];
 
-  // Cashier: Dashboard, Payments, Account
   const cashierNavItems = [
     { to: '/admin/dashboard', icon: Home,       label: 'Dashboard' },
     { to: '/admin/payments',  icon: CreditCard, label: 'Payments' },
     { to: '/admin/account',   icon: User,       label: 'Account' },
   ];
 
-  // Program Head: Dashboard, Students, Account
   const programheadNavItems = [
     { to: '/admin/dashboard', icon: Home,  label: 'Dashboard' },
     { to: '/admin/students',  icon: Users, label: 'Students' },
@@ -63,6 +109,8 @@ const Sidebar = () => {
   };
 
   const navItems = getNavItems();
+  const displayFirstName = localName.firstName || profile?.firstName || '';
+  const displayLastName  = localName.lastName  || profile?.lastName  || '';
 
   const SidebarContent = () => (
     <>
@@ -70,12 +118,14 @@ const Sidebar = () => {
         <div className="flex items-center gap-4">
           <img
             src={displayAvatarUrl}
-            alt={profile?.firstName}
+            alt={displayFirstName}
             className="w-16 h-16 rounded-full border-2 border-sidebar-primary object-cover"
+            // ✅ Force re-render when avatar URL changes by using it as key
+            key={localAvatarUrl || 'default'}
           />
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-sidebar-foreground truncate">
-              {profile?.firstName} {profile?.lastName}
+              {displayFirstName} {displayLastName}
             </h3>
             <p className="text-sm text-sidebar-foreground/70">{getRoleLabel()}</p>
           </div>
