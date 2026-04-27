@@ -10,30 +10,44 @@ const Sidebar = () => {
   const { profile, logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
 
-  // ✅ Local avatar state so it updates immediately without page refresh
-  const [localAvatarUrl, setLocalAvatarUrl] = useState<string | null>(null);
-  const [localName, setLocalName] = useState({ firstName: '', lastName: '' });
+  // ✅ Derive avatar directly from profile (auto-updates when refreshProfile() is called)
+  // Fall back to localStorage only if profile has no avatarUrl yet
+  const getDisplayAvatar = () => {
+    if (profile?.avatarUrl) return profile.avatarUrl;
+    if (profile?.id) {
+      const stored = profileStorage.getByUserId(profile.id);
+      if (stored?.avatarUrl) return stored.avatarUrl;
+    }
+    return profileStorage.getAvatarUrl(null, profile?.firstName);
+  };
 
-  // ✅ Sync from profile on load
+  // ✅ Force re-render when profile.avatarUrl changes by tracking it in state
+  const [displayAvatarUrl, setDisplayAvatarUrl] = useState(getDisplayAvatar());
+  const [displayName, setDisplayName] = useState({
+    firstName: profile?.firstName || '',
+    lastName:  profile?.lastName  || '',
+  });
+
+  // ✅ This runs every time profile changes in AuthContext (after refreshProfile())
   useEffect(() => {
-    if (!profile) return;
-    const stored = profile.id ? profileStorage.getByUserId(profile.id) : null;
-    setLocalAvatarUrl(profile.avatarUrl ?? stored?.avatarUrl ?? null);
-    setLocalName({
-      firstName: profile.firstName || '',
-      lastName:  profile.lastName  || '',
+    setDisplayAvatarUrl(getDisplayAvatar());
+    setDisplayName({
+      firstName: profile?.firstName || '',
+      lastName:  profile?.lastName  || '',
     });
-  }, [profile]);
+  }, [
+    profile?.avatarUrl,
+    profile?.firstName,
+    profile?.lastName,
+    profile?.id,
+  ]);
 
-  // ✅ Listen for avatar updates dispatched from Account page
+  // ✅ Also listen to custom events for instant update before refreshProfile completes
   useEffect(() => {
     const handleAvatarUpdate = (e: Event) => {
       const detail = (e as CustomEvent)?.detail;
       if (detail?.avatarUrl) {
-        setLocalAvatarUrl(detail.avatarUrl);
-      } else if (profile?.id) {
-        const stored = profileStorage.getByUserId(profile.id);
-        if (stored?.avatarUrl) setLocalAvatarUrl(stored.avatarUrl);
+        setDisplayAvatarUrl(detail.avatarUrl);
       }
     };
 
@@ -41,10 +55,10 @@ const Sidebar = () => {
       if (!profile?.id) return;
       const stored = profileStorage.getByUserId(profile.id);
       if (stored) {
-        if (stored.avatarUrl) setLocalAvatarUrl(stored.avatarUrl);
-        setLocalName({
-          firstName: stored.firstName || profile.firstName || '',
-          lastName:  stored.lastName  || profile.lastName  || '',
+        if (stored.avatarUrl) setDisplayAvatarUrl(stored.avatarUrl);
+        setDisplayName({
+          firstName: stored.firstName || profile?.firstName || '',
+          lastName:  stored.lastName  || profile?.lastName  || '',
         });
       }
     };
@@ -55,9 +69,7 @@ const Sidebar = () => {
       window.removeEventListener('avatarUpdated', handleAvatarUpdate);
       window.removeEventListener('profileUpdated', handleProfileUpdate);
     };
-  }, [profile]);
-
-  const displayAvatarUrl = profileStorage.getAvatarUrl(localAvatarUrl, localName.firstName || profile?.firstName);
+  }, [profile?.id]);
 
   const studentNavItems = [
     { to: '/student/dashboard',        icon: Home,          label: 'Dashboard' },
@@ -109,23 +121,25 @@ const Sidebar = () => {
   };
 
   const navItems = getNavItems();
-  const displayFirstName = localName.firstName || profile?.firstName || '';
-  const displayLastName  = localName.lastName  || profile?.lastName  || '';
 
   const SidebarContent = () => (
     <>
       <div className="p-6 border-b border-sidebar-border">
         <div className="flex items-center gap-4">
+          {/* ✅ key forces React to remount img when URL changes */}
           <img
+            key={displayAvatarUrl}
             src={displayAvatarUrl}
-            alt={displayFirstName}
+            alt={displayName.firstName}
             className="w-16 h-16 rounded-full border-2 border-sidebar-primary object-cover"
-            // ✅ Force re-render when avatar URL changes by using it as key
-            key={localAvatarUrl || 'default'}
+            onError={(e) => {
+              // fallback to initials avatar if image fails
+              (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${displayName.firstName}+${displayName.lastName}&background=16a34a&color=fff&size=64`;
+            }}
           />
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-sidebar-foreground truncate">
-              {displayFirstName} {displayLastName}
+              {displayName.firstName} {displayName.lastName}
             </h3>
             <p className="text-sm text-sidebar-foreground/70">{getRoleLabel()}</p>
           </div>
@@ -162,7 +176,6 @@ const Sidebar = () => {
 
   return (
     <>
-      {/* Mobile Arrow Toggle Button */}
       <Button
         variant="ghost"
         size="icon"
@@ -175,7 +188,6 @@ const Sidebar = () => {
         {isOpen ? <ChevronLeft className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
       </Button>
 
-      {/* Mobile Overlay */}
       {isOpen && (
         <div
           className="lg:hidden fixed inset-0 bg-foreground/50 z-40 backdrop-blur-sm"
@@ -183,7 +195,6 @@ const Sidebar = () => {
         />
       )}
 
-      {/* Sidebar */}
       <aside
         className={cn(
           'fixed lg:sticky top-0 left-0 h-screen bg-sidebar flex flex-col z-40 transition-transform duration-300',
