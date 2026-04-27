@@ -64,7 +64,7 @@ const invokeWithAuth = async (fnName: string, body: object) => {
   if (!token) {
     await supabase.auth.signOut();
     window.location.href = '/';
-    return { data: null, error: new Error('Session expired. Please log in again.') };
+    return { data: null, error: new Error('Session expired.') };
   }
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -92,8 +92,6 @@ const AdminStudentManagement = () => {
   const { toast } = useToast();
   const { profile } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Programhead can view but cannot add/edit/archive students
   const isAdmin = profile?.role === 'admin';
 
   const [students, setStudents]               = useState<StudentRow[]>([]);
@@ -129,10 +127,7 @@ const AdminStudentManagement = () => {
     setLoading(false);
   };
 
-  // Stable useEffect — only runs once on mount
-  useEffect(() => {
-    fetchStudents();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchStudents(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeStudents   = students.filter(s => !s.is_archived);
   const archivedStudents = students.filter(s => s.is_archived);
@@ -205,22 +200,25 @@ const AdminStudentManagement = () => {
     setSaving(false);
   };
 
+  // ✅ Now uses edit-student edge function
   const handleEditStudent = async () => {
     if (!editingStudent) return;
+    if (!formData.first_name || !formData.last_name) {
+      toast({ title: 'Missing fields', description: 'First name and last name are required.', variant: 'destructive' });
+      return;
+    }
     setSaving(true);
-    const { error } = await supabase
-      .from('students')
-      .update({
-        first_name: formData.first_name,
-        last_name: formData.last_name,
-        middle_name: formData.middle_name || null,
-        contact_number: formData.contact_number || null,
-        grade_level: formData.grade_level || null,
-        section: formData.section || null,
-      })
-      .eq('id', editingStudent.id);
+    const { error } = await invokeWithAuth('edit-student', {
+      student_id: editingStudent.id,
+      first_name: formData.first_name,
+      last_name: formData.last_name,
+      middle_name: formData.middle_name || null,
+      contact_number: formData.contact_number || null,
+      grade_level: formData.grade_level || null,
+      section: formData.section || null,
+    });
     if (error) {
-      toast({ title: 'Error', description: 'Failed to update student.', variant: 'destructive' });
+      toast({ title: 'Error', description: error.message || 'Failed to update student.', variant: 'destructive' });
     } else {
       toast({ title: 'Updated', description: 'Student profile has been updated.' });
       setFormOpen(false);
@@ -291,14 +289,10 @@ const AdminStudentManagement = () => {
         const wb = XLSX.read(evt.target?.result, { type: 'binary' });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows: Record<string, string>[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
-        if (rows.length === 0) {
-          setInvalidFormatMessage('The file is empty.');
-          setInvalidFormatOpen(true);
-          return;
-        }
+        if (rows.length === 0) { setInvalidFormatMessage('The file is empty.'); setInvalidFormatOpen(true); return; }
         const { valid, missing } = validateExcelHeaders(Object.keys(rows[0]));
         if (!valid) {
-          setInvalidFormatMessage(`Missing columns:\n• ${missing.join('\n• ')}`);
+          setInvalidFormatMessage(`Missing required columns:\n• ${missing.join('\n• ')}\n\nRequired: Email, First Name, Last Name, Contact Number`);
           setInvalidFormatOpen(true);
           return;
         }
@@ -388,7 +382,6 @@ const AdminStudentManagement = () => {
                   {s.archived_at ? new Date(s.archived_at).toLocaleDateString() : '—'}
                 </TableCell>
               )}
-              {/* Actions — admin only */}
               {isAdmin && (
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
@@ -421,7 +414,6 @@ const AdminStudentManagement = () => {
           <Users className="w-7 h-7 text-primary" />
           <h1 className="text-2xl font-bold">Student Management</h1>
         </div>
-        {/* Import/Add — admin only */}
         {isAdmin && (
           <div className="flex gap-2 flex-wrap">
             <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
@@ -445,7 +437,6 @@ const AdminStudentManagement = () => {
         />
       </div>
 
-      {/* Active Students */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="border-b bg-muted/30">
           <CardTitle className="text-lg">Students ({filtered.length})</CardTitle>
@@ -465,7 +456,6 @@ const AdminStudentManagement = () => {
         </CardContent>
       </Card>
 
-      {/* Archived Students */}
       <Card className="border-2 shadow-lg">
         <CardHeader className="cursor-pointer bg-muted/30" onClick={() => setShowArchived(!showArchived)}>
           <div className="flex items-center justify-between">
@@ -495,7 +485,6 @@ const AdminStudentManagement = () => {
         )}
       </Card>
 
-      {/* Add/Edit Dialog — admin only */}
       {isAdmin && (
         <Dialog open={formOpen} onOpenChange={(open) => { if (!open) { setFormOpen(false); setEditingStudent(null); } }}>
           <DialogContent className="max-w-lg">
@@ -525,8 +514,12 @@ const AdminStudentManagement = () => {
                 <Input value={formData.middle_name} onChange={(e) => setFormData({ ...formData, middle_name: e.target.value.replace(/[^a-zA-Z\s]/g, '') })} />
               </div>
               <div className="space-y-2">
-                <Label>Contact Number *</Label>
-                <Input value={formData.contact_number} onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '') })} />
+                <Label>Contact Number {!editingStudent && '*'}</Label>
+                <Input
+                  value={formData.contact_number}
+                  maxLength={11}
+                  onChange={(e) => setFormData({ ...formData, contact_number: e.target.value.replace(/[^0-9]/g, '').slice(0, 11) })}
+                />
               </div>
               <div className="space-y-2">
                 <Label>Grade Level</Label>
@@ -548,7 +541,6 @@ const AdminStudentManagement = () => {
         </Dialog>
       )}
 
-      {/* Archive Confirmation — admin only */}
       {isAdmin && (
         <AlertDialog open={!!archiveTarget} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>
           <AlertDialogContent>
@@ -556,7 +548,7 @@ const AdminStudentManagement = () => {
               <AlertDialogTitle>{archiveTarget?.is_archived ? 'Restore Student' : 'Archive Student'}</AlertDialogTitle>
               <AlertDialogDescription>
                 {archiveTarget?.is_archived
-                  ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}?`
+                  ? `Restore ${archiveTarget?.first_name} ${archiveTarget?.last_name}? They will appear in the active list again.`
                   : `Archive ${archiveTarget?.first_name} ${archiveTarget?.last_name}? Data will be kept.`}
               </AlertDialogDescription>
             </AlertDialogHeader>
@@ -583,9 +575,7 @@ const AdminStudentManagement = () => {
             </AlertDialogTitle>
             <AlertDialogDescription className="whitespace-pre-line">{invalidFormatMessage}</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogAction onClick={() => setInvalidFormatOpen(false)}>OK</AlertDialogAction>
-          </AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogAction onClick={() => setInvalidFormatOpen(false)}>OK</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
@@ -597,9 +587,7 @@ const AdminStudentManagement = () => {
             </AlertDialogTitle>
             <AlertDialogDescription>{duplicateAlertMessage}</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogAction onClick={() => setDuplicateAlertOpen(false)}>OK</AlertDialogAction>
-          </AlertDialogFooter>
+          <AlertDialogFooter><AlertDialogAction onClick={() => setDuplicateAlertOpen(false)}>OK</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
@@ -610,7 +598,7 @@ const AdminStudentManagement = () => {
               <DialogTitle className="flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5" />Import Preview — {importPreview.length} students
               </DialogTitle>
-              <DialogDescription>Review the students below before confirming the import.</DialogDescription>
+              <DialogDescription>Review the students below before confirming.</DialogDescription>
             </DialogHeader>
             {importDuplicates.length > 0 && (
               <div className="border border-amber-300 bg-amber-50 dark:bg-amber-950/30 rounded-md p-3 space-y-2">
