@@ -33,14 +33,12 @@ const Account = () => {
         setAvatarUrl(profile.avatarUrl);
       } else {
         const savedProfile = profileStorage.getByUserId(user.id);
-        if (savedProfile?.avatarUrl) {
-          setAvatarUrl(savedProfile.avatarUrl);
-        }
+        if (savedProfile?.avatarUrl) setAvatarUrl(savedProfile.avatarUrl);
       }
       setEditedInfo({
-        firstName: profile?.firstName || '',
-        middleName: profile?.middleName || '',
-        lastName: profile?.lastName || '',
+        firstName:     profile?.firstName     || '',
+        middleName:    profile?.middleName    || '',
+        lastName:      profile?.lastName      || '',
         contactNumber: profile?.contactNumber || '',
       });
     }
@@ -59,8 +57,8 @@ const Account = () => {
         .eq('user_id', user.id);
       if (data) {
         const completed = data.filter(r => r.status === 'Completed').length;
-        const approved = data.filter(r => r.status === 'Approved' || r.status === 'Ready').length;
-        const pending = data.filter(r => r.status === 'Processing' || r.status === 'pending').length;
+        const approved  = data.filter(r => r.status === 'Approved' || r.status === 'Ready').length;
+        const pending   = data.filter(r => r.status === 'Processing' || r.status === 'pending').length;
         setStats({ total: data.length, approved, completed, pending });
       }
     };
@@ -69,35 +67,27 @@ const Account = () => {
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && user?.id) {
-      setIsUploadingAvatar(true);
-      try {
-        const newAvatarUrl = await profileStorage.uploadAvatar(user.id, file);
-        setAvatarUrl(newAvatarUrl);
-
-        await supabase
-          .from('students')
-          .update({ avatar_url: newAvatarUrl })
-          .eq('user_id', user.id);
-
-        profileStorage.save({
-          userId: user.id,
-          avatarUrl: newAvatarUrl,
-          firstName: editedInfo.firstName,
-          lastName: editedInfo.lastName,
-          middleName: editedInfo.middleName,
-          contactNumber: editedInfo.contactNumber,
-        });
-
-        await refreshProfile();
-        window.dispatchEvent(new Event('avatarUpdated'));
-
-        toast({ title: 'Photo Updated', description: 'Your profile photo has been saved.' });
-      } catch (error) {
-        toast({ title: 'Upload Failed', description: 'Failed to upload photo. Please try again.', variant: 'destructive' });
-      } finally {
-        setIsUploadingAvatar(false);
-      }
+    if (!file || !user?.id) return;
+    setIsUploadingAvatar(true);
+    try {
+      const newAvatarUrl = await profileStorage.uploadAvatar(user.id, file);
+      setAvatarUrl(newAvatarUrl);
+      await supabase.from('students').update({ avatar_url: newAvatarUrl }).eq('user_id', user.id);
+      profileStorage.save({
+        userId: user.id,
+        avatarUrl: newAvatarUrl,
+        firstName: editedInfo.firstName,
+        lastName: editedInfo.lastName,
+        middleName: editedInfo.middleName,
+        contactNumber: editedInfo.contactNumber,
+      });
+      await refreshProfile();
+      window.dispatchEvent(new CustomEvent('avatarUpdated', { detail: { avatarUrl: newAvatarUrl } }));
+      toast({ title: 'Photo Updated', description: 'Your profile photo has been saved.' });
+    } catch {
+      toast({ title: 'Upload Failed', description: 'Failed to upload photo. Please try again.', variant: 'destructive' });
+    } finally {
+      setIsUploadingAvatar(false);
     }
   };
 
@@ -122,9 +112,9 @@ const Account = () => {
     const { error } = await supabase
       .from('students')
       .update({
-        first_name: editedInfo.firstName,
-        middle_name: editedInfo.middleName || null,
-        last_name: editedInfo.lastName,
+        first_name:     editedInfo.firstName,
+        middle_name:    editedInfo.middleName  || null,
+        last_name:      editedInfo.lastName,
         contact_number: editedInfo.contactNumber || null,
       })
       .eq('user_id', user.id);
@@ -135,23 +125,40 @@ const Account = () => {
       return;
     }
 
-    // ✅ Update password if provided
+    // ✅ Update password with fresh session to avoid 400 error
     if (newPassword) {
-      const { error: pwError } = await supabase.auth.updateUser({ password: newPassword });
-      if (pwError) {
-        toast({ title: 'Password Error', description: pwError.message, variant: 'destructive' });
+      try {
+        // Refresh session first to ensure token is valid
+        const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+
+        if (refreshError || !refreshed?.session) {
+          toast({ title: 'Session Expired', description: 'Please log out and log in again to change your password.', variant: 'destructive' });
+          setIsSaving(false);
+          return;
+        }
+
+        const { error: pwError } = await supabase.auth.updateUser({ password: newPassword });
+
+        if (pwError) {
+          toast({ title: 'Password Error', description: pwError.message, variant: 'destructive' });
+          setIsSaving(false);
+          return;
+        }
+
+        toast({ title: 'Password Updated', description: 'Your password has been changed successfully.' });
+      } catch (err: any) {
+        toast({ title: 'Password Error', description: err.message || 'Failed to update password.', variant: 'destructive' });
         setIsSaving(false);
         return;
       }
-      toast({ title: 'Password Updated', description: 'Your password has been changed successfully.' });
     }
 
     profileStorage.save({
       userId: user.id,
-      avatarUrl: avatarUrl,
-      firstName: editedInfo.firstName,
-      lastName: editedInfo.lastName,
-      middleName: editedInfo.middleName,
+      avatarUrl,
+      firstName:     editedInfo.firstName,
+      lastName:      editedInfo.lastName,
+      middleName:    editedInfo.middleName,
       contactNumber: editedInfo.contactNumber,
     });
 
@@ -167,23 +174,23 @@ const Account = () => {
 
   const handleLogout = () => {
     setIsLoggingOut(true);
-    setTimeout(() => { logout(); }, 500);
+    setTimeout(() => logout(), 500);
   };
 
   const handleCancel = () => {
     if (user?.id) {
       const savedProfile = profileStorage.getByUserId(user.id);
       setEditedInfo({
-        firstName: savedProfile?.firstName || profile?.firstName || '',
-        middleName: savedProfile?.middleName || profile?.middleName || '',
-        lastName: savedProfile?.lastName || profile?.lastName || '',
+        firstName:     savedProfile?.firstName     || profile?.firstName     || '',
+        middleName:    savedProfile?.middleName    || profile?.middleName    || '',
+        lastName:      savedProfile?.lastName      || profile?.lastName      || '',
         contactNumber: savedProfile?.contactNumber || profile?.contactNumber || '',
       });
     } else {
       setEditedInfo({
-        firstName: profile?.firstName || '',
-        middleName: profile?.middleName || '',
-        lastName: profile?.lastName || '',
+        firstName:     profile?.firstName     || '',
+        middleName:    profile?.middleName    || '',
+        lastName:      profile?.lastName      || '',
         contactNumber: profile?.contactNumber || '',
       });
     }
@@ -200,6 +207,7 @@ const Account = () => {
             <div className="flex items-center gap-4">
               <div className="relative group">
                 <img
+                  key={displayAvatarUrl}
                   src={displayAvatarUrl}
                   alt={profile?.firstName}
                   className="w-20 h-20 rounded-full border-4 border-primary shadow-lg object-cover"
@@ -211,11 +219,9 @@ const Account = () => {
                     type="button"
                     disabled={isUploadingAvatar}
                   >
-                    {isUploadingAvatar ? (
-                      <Loader2 className="w-6 h-6 text-white animate-spin" />
-                    ) : (
-                      <Camera className="w-6 h-6 text-white" />
-                    )}
+                    {isUploadingAvatar
+                      ? <Loader2 className="w-6 h-6 text-white animate-spin" />
+                      : <Camera  className="w-6 h-6 text-white" />}
                   </button>
                 )}
                 <input ref={fileInputRef} type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
@@ -224,7 +230,6 @@ const Account = () => {
                 <CardTitle className="text-2xl">
                   {profile?.firstName} {profile?.middleName ? profile.middleName + ' ' : ''}{profile?.lastName}
                 </CardTitle>
-                {/* ✅ Show Student ID under name instead of email */}
                 <p className="text-muted-foreground font-mono">
                   {profile?.studentId ? `ID: ${profile.studentId}` : 'No Student ID'}
                 </p>
@@ -233,54 +238,66 @@ const Account = () => {
             <div className="flex gap-2">
               {!isEditing ? (
                 <Button onClick={() => setIsEditing(true)} variant="outline">
-                  <Edit2 className="w-4 h-4 mr-2" />
-                  Edit
+                  <Edit2 className="w-4 h-4 mr-2" />Edit
                 </Button>
               ) : (
                 <>
-                  <Button onClick={handleSave} variant="default" disabled={isSaving}>
+                  <Button onClick={handleSave} disabled={isSaving}>
                     {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                     {isSaving ? 'Saving...' : 'Save'}
                   </Button>
                   <Button onClick={handleCancel} variant="outline" disabled={isSaving}>
-                    <X className="w-4 h-4 mr-2" />
-                    Cancel
+                    <X className="w-4 h-4 mr-2" />Cancel
                   </Button>
                 </>
               )}
             </div>
           </div>
         </CardHeader>
+
         <CardContent className="pt-6 space-y-6">
-          {/* Profile Fields */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Editable fields */}
             <div className="space-y-2">
               <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />First Name</Label>
-              <Input value={editedInfo.firstName} disabled={!isEditing}
+              <Input
+                value={editedInfo.firstName}
+                disabled={!isEditing}
                 onChange={(e) => setEditedInfo({ ...editedInfo, firstName: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
-                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'}
+              />
             </div>
             <div className="space-y-2">
               <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Middle Name</Label>
-              <Input value={editedInfo.middleName} disabled={!isEditing}
+              <Input
+                value={editedInfo.middleName}
+                disabled={!isEditing}
                 onChange={(e) => setEditedInfo({ ...editedInfo, middleName: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
-                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'}
+              />
             </div>
             <div className="space-y-2">
               <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Last Name</Label>
-              <Input value={editedInfo.lastName} disabled={!isEditing}
+              <Input
+                value={editedInfo.lastName}
+                disabled={!isEditing}
                 onChange={(e) => setEditedInfo({ ...editedInfo, lastName: e.target.value.replace(/[^a-zA-Z\s]/g, '') })}
-                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'}
+              />
             </div>
             <div className="space-y-2">
               <Label className="flex items-center gap-2 text-muted-foreground"><Phone className="w-4 h-4" />Contact Number</Label>
-              <Input value={editedInfo.contactNumber} disabled={!isEditing}
-                onChange={(e) => setEditedInfo({ ...editedInfo, contactNumber: e.target.value.replace(/[^0-9]/g, '') })}
-                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'} />
+              <Input
+                value={editedInfo.contactNumber}
+                disabled={!isEditing}
+                onChange={(e) => setEditedInfo({
+                  ...editedInfo,
+                  // ✅ Limit to 11 digits
+                  contactNumber: e.target.value.replace(/[^0-9]/g, '').slice(0, 11),
+                })}
+                maxLength={11}
+                className={isEditing ? 'border-2 font-medium' : 'bg-muted border-2 font-medium'}
+              />
             </div>
-
-            {/* Read-only fields */}
             <div className="space-y-2">
               <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Student ID</Label>
               <Input value={profile?.studentId || '—'} disabled className="bg-muted border-2 font-medium" />
@@ -299,7 +316,7 @@ const Account = () => {
             </div>
           </div>
 
-          {/* ✅ Password change section - only shows when editing */}
+          {/* ✅ Password change - only shows when editing */}
           {isEditing && (
             <div className="border-t pt-6 space-y-4">
               <h3 className="font-semibold flex items-center gap-2">
@@ -371,12 +388,10 @@ const Account = () => {
         </CardContent>
       </Card>
 
-      <div className="mt-5">
-        <Button onClick={handleLogout} variant="destructive" className="w-full h-12" disabled={isLoggingOut}>
-          {isLoggingOut ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LogOut className="w-4 h-4 mr-2" />}
-          {isLoggingOut ? 'Logging out...' : 'Logout'}
-        </Button>
-      </div>
+      <Button onClick={handleLogout} variant="destructive" className="w-full h-12" disabled={isLoggingOut}>
+        {isLoggingOut ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LogOut className="w-4 h-4 mr-2" />}
+        {isLoggingOut ? 'Logging out...' : 'Logout'}
+      </Button>
     </div>
   );
 };
