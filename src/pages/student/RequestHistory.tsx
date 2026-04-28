@@ -14,7 +14,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from '@/components/ui/pagination';
-import { History, Eye, Archive, ChevronDown, ChevronUp, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { History, Eye, Archive, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { usePagination } from '@/hooks/usePagination';
 import TrackingStepper from '@/components/TrackingStepper';
 import { trackingUtils } from '@/lib/tracking';
@@ -35,7 +35,6 @@ interface RequestDisplay {
   requestDate: string;
   status: string;
   paymentMethod: string;
-  paymentStatus: string; // ✅ Added
   amount: string;
   gradeLevel: string;
   section: string;
@@ -60,6 +59,7 @@ const RequestHistory = () => {
     if (!user?.id) return;
     
     try {
+      // Fetch requests with items
       const { data: requests, error } = await supabase
         .from('document_requests')
         .select('*, document_request_items(*)')
@@ -71,6 +71,7 @@ const RequestHistory = () => {
         return;
       }
 
+      // Fetch payments for these requests
       const requestIds = (requests || []).map(r => r.id);
       let paymentsMap: Record<string, any> = {};
       if (requestIds.length > 0) {
@@ -89,11 +90,6 @@ const RequestHistory = () => {
         const totalAmount = items.reduce((sum: number, item: any) => sum + Number(item.price), 0);
         const formattedId = `REQ-${String(req.request_number).padStart(3, '0')}`;
 
-        // ✅ Determine payment status
-        const paymentStatus = payment?.status === 'paid' || payment?.paid_at
-          ? 'paid'
-          : 'not_paid';
-
         return {
           id: formattedId,
           requestNumber: req.request_number,
@@ -102,7 +98,6 @@ const RequestHistory = () => {
           requestDate: req.created_at,
           status: req.status,
           paymentMethod: req.payment_method,
-          paymentStatus,
           amount: `₱${totalAmount.toLocaleString()}.00`,
           gradeLevel: req.grade_level,
           section: req.section,
@@ -125,6 +120,7 @@ const RequestHistory = () => {
   useEffect(() => {
     fetchRequests();
 
+    // Subscribe to realtime changes
     const channel = supabase
       .channel('request-updates')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'document_requests' }, () => {
@@ -135,6 +131,7 @@ const RequestHistory = () => {
     return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
 
+  // Apply filter from query params
   const filteredActiveRequests = filterParam === 'approved'
     ? activeRequests.filter(r => r.status === 'Approved' || r.status === 'Ready')
     : filterParam === 'pending'
@@ -144,30 +141,12 @@ const RequestHistory = () => {
   const activePagination = usePagination({ data: filteredActiveRequests, itemsPerPage: 3 });
   const archivedPagination = usePagination({ data: archivedRequests, itemsPerPage: 3 });
 
-  const clearFilter = () => { setSearchParams({}); };
-  const handleViewDetails = (request: RequestDisplay) => { setSelectedRequest(request); };
+  const clearFilter = () => {
+    setSearchParams({});
+  };
 
-  // ✅ Payment status badge component
-  const PaymentBadge = ({ status, method }: { status: string; method: string }) => {
-    const isPaid = status === 'paid';
-    // Cash is always "pending payment" until admin marks it paid
-    const isCash = method?.toLowerCase() === 'cash';
-
-    if (isPaid) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700 border border-green-200">
-          <CheckCircle2 className="w-3 h-3" />
-          Paid
-        </span>
-      );
-    }
-
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-600 border border-red-200">
-        <XCircle className="w-3 h-3" />
-        {isCash ? 'Not Yet Paid' : 'Payment Pending'}
-      </span>
-    );
+  const handleViewDetails = (request: RequestDisplay) => {
+    setSelectedRequest(request);
   };
 
   if (loading) {
@@ -257,16 +236,6 @@ const RequestHistory = () => {
                       </span>
                     </span>
                   </div>
-
-                  {/* ✅ Payment status row */}
-                  <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground">Payment:</span>
-                      <span className="font-medium capitalize">{request.paymentMethod}</span>
-                    </div>
-                    <PaymentBadge status={request.paymentStatus} method={request.paymentMethod} />
-                  </div>
-
                   <div className="px-4 md:px-8 py-6">
                     <TrackingStepper status={request.status} />
                   </div>
@@ -375,16 +344,6 @@ const RequestHistory = () => {
                         <span className="font-medium">{request.claimDate}</span>
                       </span>
                     </div>
-
-                    {/* ✅ Payment status row for archived */}
-                    <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="text-muted-foreground">Payment:</span>
-                        <span className="font-medium capitalize">{request.paymentMethod}</span>
-                      </div>
-                      <PaymentBadge status={request.paymentStatus} method={request.paymentMethod} />
-                    </div>
-
                     <div className="flex justify-end items-center px-4 py-3 border-t">
                       <Button
                         variant="outline"
@@ -476,25 +435,6 @@ const RequestHistory = () => {
                   <span className="text-muted-foreground">Amount:</span>
                   <p className="font-medium">{selectedRequest.amount}</p>
                 </div>
-                {/* ✅ Payment status in dialog */}
-                <div className="col-span-2">
-                  <span className="text-muted-foreground">Payment Status:</span>
-                  <div className="mt-1">
-                    <PaymentBadge status={selectedRequest.paymentStatus} method={selectedRequest.paymentMethod} />
-                  </div>
-                </div>
-                {selectedRequest.referenceNumber && (
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground">Reference Number:</span>
-                    <p className="font-medium font-mono">{selectedRequest.referenceNumber}</p>
-                  </div>
-                )}
-                {selectedRequest.paidAt && (
-                  <div className="col-span-2">
-                    <span className="text-muted-foreground">Paid At:</span>
-                    <p className="font-medium">{new Date(selectedRequest.paidAt).toLocaleString()}</p>
-                  </div>
-                )}
               </div>
               <Button onClick={() => setSelectedRequest(null)} className="w-full">
                 Close
