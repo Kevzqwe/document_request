@@ -8,16 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { FileText, CheckCircle2, Loader2, CreditCard } from 'lucide-react';
 import { DOCUMENT_TYPES, PAYMENT_METHODS, documentUtils } from '@/lib/documents';
 import { smsService } from '@/lib/smsService';
-
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { saveRequestToDb } from '@/lib/saveRequestToDb';
@@ -34,53 +29,86 @@ const DocumentRequest = () => {
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const realtimeChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  // Use AuthContext profile directly (database source of truth)
   const displayProfile = {
-    firstName: profile?.firstName || '',
-    middleName: profile?.middleName || '',
-    lastName: profile?.lastName || '',
+    firstName:     profile?.firstName     || '',
+    middleName:    profile?.middleName    || '',
+    lastName:      profile?.lastName      || '',
     contactNumber: profile?.contactNumber || '',
-    gradeLevel: profile?.gradeLevel || '',
-    section: profile?.section || '',
-    user_id: profile?.user_id || user?.id || '',
+    gradeLevel:    profile?.gradeLevel    || '',
+    section:       profile?.section       || '',
+    username:      profile?.username      || user?.email || '',
+    user_id:       profile?.user_id       || user?.id    || '',
   };
 
   const handleDocumentToggle = (value: string) => {
     setSelectedDocuments(prev =>
-      prev.includes(value)
-        ? prev.filter(doc => doc !== value)
-        : [...prev, value]
+      prev.includes(value) ? prev.filter(d => d !== value) : [...prev, value]
     );
   };
 
+  // ✅ Send confirmation email via send-request-email edge function
+  const sendConfirmationEmail = async (
+    referenceNumber: string,
+    documentLabels: string[],
+    totalAmount: number,
+  ) => {
+    if (!displayProfile.username) return;
+
+    try {
+      const supabaseUrl    = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      await fetch(`${supabaseUrl}/functions/v1/send-request-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'apikey': supabaseAnonKey,
+        },
+        body: JSON.stringify({
+          to:              displayProfile.username,
+          studentName:     `${displayProfile.firstName} ${displayProfile.lastName}`.trim(),
+          contactNumber:   displayProfile.contactNumber,
+          referenceNumber,
+          documents:       documentLabels,
+          quantities:      documentLabels.map(() => 1), // 1 copy each by default
+          totalAmount,
+          paymentMethod,
+        }),
+      });
+
+      console.log('Confirmation email sent to:', displayProfile.username);
+    } catch (err) {
+      // Non-critical — don't block the flow
+      console.error('Failed to send confirmation email:', err);
+    }
+  };
+
   const handleCashPayment = async () => {
-    // Get document labels for storage
     const documentLabels = selectedDocuments
-      .map(docValue => documentUtils.getDocumentByValue(docValue)?.label)
+      .map(v => documentUtils.getDocumentByValue(v)?.label)
       .filter(Boolean) as string[];
 
-    const totalAmount = documentUtils.calculateTotal(selectedDocuments);
-    const studentName = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
+    const totalAmount  = documentUtils.calculateTotal(selectedDocuments);
+    const studentName  = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
 
-    // Save to Supabase database
     const savedRequest = await saveRequestToDb({
-      userId: displayProfile.user_id,
+      userId:        displayProfile.user_id,
       studentName,
       contactNumber: displayProfile.contactNumber,
-      gradeLevel: displayProfile.gradeLevel,
-      section: displayProfile.section,
-      documents: documentLabels,
+      gradeLevel:    displayProfile.gradeLevel,
+      section:       displayProfile.section,
+      documents:     documentLabels,
       paymentMethod: 'cash',
       totalAmount,
       paymentStatus: 'pending',
     });
 
     if (!savedRequest) {
-      toast({
-        title: 'Error',
-        description: 'Failed to submit request. Please try again.',
-        variant: 'destructive',
-      });
+      toast({ title: 'Error', description: 'Failed to submit request. Please try again.', variant: 'destructive' });
       setIsSubmitting(false);
       return;
     }
@@ -88,7 +116,7 @@ const DocumentRequest = () => {
     const formattedId = `REQ-${String(savedRequest.request_number).padStart(3, '0')}`;
     setSubmittedRequestId(formattedId);
 
-    // Send SMS notification
+    // ✅ Send SMS notification
     if (displayProfile.contactNumber) {
       await smsService.notifyNewRequest(
         displayProfile.contactNumber,
@@ -98,60 +126,41 @@ const DocumentRequest = () => {
       );
     }
 
+    // ✅ Send email confirmation
+    await sendConfirmationEmail(formattedId, documentLabels, totalAmount);
+
     setShowSuccessModal(true);
     setSelectedDocuments([]);
     setPaymentMethod('');
   };
 
-  // Cleanup polling and realtime on unmount
   useEffect(() => {
     return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
-      if (realtimeChannelRef.current) {
-        supabase.removeChannel(realtimeChannelRef.current);
-      }
+      if (pollingIntervalRef.current)  clearInterval(pollingIntervalRef.current);
+      if (realtimeChannelRef.current)  supabase.removeChannel(realtimeChannelRef.current);
     };
   }, []);
 
   const startPaymentPolling = (invoiceId: string) => {
-    // Start polling for payment status
     pollingIntervalRef.current = setInterval(async () => {
       try {
         const { data, error } = await supabase.functions.invoke('verify-payment', {
           body: { sessionId: invoiceId },
         });
-
-        if (error) {
-          console.error('Polling error:', error);
-          return;
-        }
-
+        if (error) { console.error('Polling error:', error); return; }
         if (data.verified) {
-          // Payment confirmed! Stop polling and redirect
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-          }
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
           setShowPaymentPendingModal(false);
-          
-          // Navigate to success page WITH invoice_id to ensure it works
           navigate(`/payment-success?invoice_id=${invoiceId}`);
         }
-      } catch (err) {
-        console.error('Polling error:', err);
-      }
-    }, 3000); // Poll every 3 seconds
+      } catch (err) { console.error('Polling error:', err); }
+    }, 3000);
 
-    // Also listen for realtime broadcast
     realtimeChannelRef.current = supabase
       .channel('payment-updates')
       .on('broadcast', { event: 'payment-confirmed' }, (payload) => {
-        console.log('Realtime payment update:', payload);
         if (payload.payload?.invoiceId === invoiceId) {
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-          }
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
           setShowPaymentPendingModal(false);
           navigate(`/payment-success?invoice_id=${invoiceId}`);
         }
@@ -161,56 +170,49 @@ const DocumentRequest = () => {
 
   const handleOnlinePayment = async () => {
     const documentLabels = selectedDocuments
-      .map(docValue => documentUtils.getDocumentByValue(docValue)?.label)
+      .map(v => documentUtils.getDocumentByValue(v)?.label)
       .filter(Boolean) as string[];
 
     const totalAmount = documentUtils.calculateTotal(selectedDocuments);
     const studentName = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
-    
-    // Get the current origin for redirect URLs
     const currentOrigin = window.location.origin;
 
     try {
-      // Create Xendit checkout session
       const { data, error } = await supabase.functions.invoke('create-checkout', {
         body: {
-          amount: totalAmount,
-          description: `Document Request - ${documentLabels.join(', ')}`,
+          amount:        totalAmount,
+          description:   `Document Request - ${documentLabels.join(', ')}`,
           studentName,
           contactNumber: displayProfile.contactNumber,
-          documents: documentLabels,
-          userId: displayProfile.user_id,
-          gradeLevel: displayProfile.gradeLevel,
-          section: displayProfile.section,
+          documents:     documentLabels,
+          userId:        displayProfile.user_id,
+          gradeLevel:    displayProfile.gradeLevel,
+          section:       displayProfile.section,
           paymentMethod,
-          successUrl: `${currentOrigin}/payment-success`,
-          cancelUrl: `${currentOrigin}/payment-cancel`,
+          successUrl:    `${currentOrigin}/payment-success`,
+          cancelUrl:     `${currentOrigin}/payment-cancel`,
         },
       });
 
       if (error) throw error;
+      if (!data.success) throw new Error(data.error || 'Failed to create checkout session');
 
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to create checkout session');
-      }
-
-      // Store the invoice ID in localStorage for verification after redirect
       const invoiceId = data.checkoutSessionId;
-      console.log('Storing invoice ID:', invoiceId);
       localStorage.setItem('pending_xendit_invoice', invoiceId);
 
-      // Show pending modal and start polling
+      // ✅ Send email for online payment too (pending)
+      const refNumber = `REQ-ONL-${invoiceId.slice(-6).toUpperCase()}`;
+      await sendConfirmationEmail(refNumber, documentLabels, totalAmount);
+
       setShowPaymentPendingModal(true);
       startPaymentPolling(invoiceId);
-
-      // Open Xendit checkout in a new tab
       window.open(data.checkoutUrl, '_blank');
-      
+
     } catch (err) {
       console.error('Checkout error:', err);
       toast({
         title: 'Payment Error',
-        description: err instanceof Error ? err.message : 'Failed to initiate payment. Please try again.',
+        description: err instanceof Error ? err.message : 'Failed to initiate payment.',
         variant: 'destructive',
       });
       setIsSubmitting(false);
@@ -219,25 +221,17 @@ const DocumentRequest = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (selectedDocuments.length === 0 || !paymentMethod) {
-      return;
-    }
-
+    if (selectedDocuments.length === 0 || !paymentMethod) return;
     setIsSubmitting(true);
-
-    // Check if cash or online payment
     if (paymentMethod === 'cash') {
       await handleCashPayment();
       setIsSubmitting(false);
     } else {
-      // Online payment (gcash or maya)
       await handleOnlinePayment();
-      // isSubmitting stays true until payment is confirmed or cancelled
     }
   };
 
-  const totalAmount = documentUtils.calculateTotal(selectedDocuments);
+  const totalAmount    = documentUtils.calculateTotal(selectedDocuments);
   const isOnlinePayment = paymentMethod === 'online';
 
   return (
@@ -257,56 +251,31 @@ const DocumentRequest = () => {
           </CardHeader>
           <CardContent className="pt-6">
             <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Personal Information (Locked) */}
+              {/* Personal Information */}
               <div className="space-y-4">
                 <h3 className="font-semibold text-lg border-b pb-2">Personal Information</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="lastName">Last Name</Label>
-                    <Input
-                      id="lastName"
-                      value={displayProfile.lastName}
-                      disabled
-                      className="bg-muted"
-                    />
+                    <Label>Last Name</Label>
+                    <Input value={displayProfile.lastName} disabled className="bg-muted" />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="firstName">First Name</Label>
-                    <Input
-                      id="firstName"
-                      value={displayProfile.firstName}
-                      disabled
-                      className="bg-muted"
-                    />
+                    <Label>First Name</Label>
+                    <Input value={displayProfile.firstName} disabled className="bg-muted" />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="middleName">Middle Name</Label>
-                    <Input
-                      id="middleName"
-                      value={displayProfile.middleName}
-                      disabled
-                      className="bg-muted"
-                    />
+                    <Label>Middle Name</Label>
+                    <Input value={displayProfile.middleName} disabled className="bg-muted" />
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="contactNumber">Contact Number</Label>
-                    <Input
-                      id="contactNumber"
-                      value={displayProfile.contactNumber}
-                      disabled
-                      className="bg-muted"
-                    />
+                    <Label>Contact Number</Label>
+                    <Input value={displayProfile.contactNumber} disabled className="bg-muted" />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="gradeLevel">Grade Level & Section</Label>
-                    <Input
-                      id="gradeLevel"
-                      value={`${displayProfile.gradeLevel} - ${displayProfile.section}`}
-                      disabled
-                      className="bg-muted"
-                    />
+                    <Label>Grade Level & Section</Label>
+                    <Input value={`${displayProfile.gradeLevel} - ${displayProfile.section}`} disabled className="bg-muted" />
                   </div>
                 </div>
               </div>
@@ -326,17 +295,14 @@ const DocumentRequest = () => {
                         checked={selectedDocuments.includes(doc.value)}
                         onCheckedChange={() => handleDocumentToggle(doc.value)}
                       />
-                      <Label
-                        htmlFor={doc.value}
-                        className="flex-1 cursor-pointer flex justify-between items-center"
-                      >
+                      <Label htmlFor={doc.value} className="flex-1 cursor-pointer flex justify-between items-center">
                         <span className="font-medium">{doc.label}</span>
                         <span className="text-muted-foreground">{documentUtils.formatPrice(doc.price)}</span>
                       </Label>
                     </div>
                   ))}
                 </div>
-                
+
                 {selectedDocuments.length > 0 && (
                   <div className="p-4 bg-primary/10 border-2 border-primary/30 rounded-lg space-y-2">
                     <div className="flex justify-between items-center">
@@ -347,9 +313,7 @@ const DocumentRequest = () => {
                       {selectedDocuments.map(docValue => {
                         const doc = documentUtils.getDocumentByValue(docValue);
                         return doc ? (
-                          <span key={docValue} className="text-xs bg-white/50 px-2 py-1 rounded">
-                            {doc.label}
-                          </span>
+                          <span key={docValue} className="text-xs bg-white/50 px-2 py-1 rounded">{doc.label}</span>
                         ) : null;
                       })}
                     </div>
@@ -374,9 +338,7 @@ const DocumentRequest = () => {
                         <RadioGroupItem value={method.value} id={method.value} />
                         <Label htmlFor={method.value} className="flex-1 cursor-pointer">
                           <div className="font-medium">{method.label}</div>
-                          <div className="text-sm text-muted-foreground">
-                            {method.description}
-                          </div>
+                          <div className="text-sm text-muted-foreground">{method.description}</div>
                         </Label>
                       </div>
                     ))}
@@ -408,6 +370,7 @@ const DocumentRequest = () => {
         </Card>
       </div>
 
+      {/* Success Modal */}
       <Dialog open={showSuccessModal} onOpenChange={setShowSuccessModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -418,14 +381,12 @@ const DocumentRequest = () => {
             </div>
             <DialogTitle className="text-center text-2xl">Request Submitted!</DialogTitle>
             <DialogDescription className="text-center text-base pt-2">
-              Your document request <span className="font-semibold text-primary">{submittedRequestId}</span> has been successfully submitted and is now being processed. 
+              Your document request <span className="font-semibold text-primary">{submittedRequestId}</span> has been successfully submitted.
+              A confirmation email and SMS have been sent to you.
               You can track the status in the Request History section.
             </DialogDescription>
           </DialogHeader>
-          <Button
-            onClick={() => setShowSuccessModal(false)}
-            className="w-full mt-4"
-          >
+          <Button onClick={() => setShowSuccessModal(false)} className="w-full mt-4">
             Close
           </Button>
         </DialogContent>
@@ -434,13 +395,8 @@ const DocumentRequest = () => {
       {/* Payment Pending Modal */}
       <Dialog open={showPaymentPendingModal} onOpenChange={(open) => {
         if (!open) {
-          // User closed modal - stop polling
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-          }
-          if (realtimeChannelRef.current) {
-            supabase.removeChannel(realtimeChannelRef.current);
-          }
+          if (pollingIntervalRef.current)  clearInterval(pollingIntervalRef.current);
+          if (realtimeChannelRef.current)  supabase.removeChannel(realtimeChannelRef.current);
           setIsSubmitting(false);
         }
         setShowPaymentPendingModal(open);
@@ -454,27 +410,19 @@ const DocumentRequest = () => {
             </div>
             <DialogTitle className="text-center text-2xl">Completing Payment...</DialogTitle>
             <DialogDescription className="text-center text-base pt-2">
-              A new tab has opened for you to complete the payment. 
+              A new tab has opened for you to complete the payment.
               This page will automatically update once your payment is confirmed.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-4">
-            <p className="text-sm text-center text-muted-foreground">
-              Don't see the payment page? 
-            </p>
+            <p className="text-sm text-center text-muted-foreground">Don't see the payment page?</p>
             <Button
               variant="outline"
               onClick={() => {
                 const invoiceId = localStorage.getItem('pending_xendit_invoice');
                 if (invoiceId) {
-                  // Re-open the payment page
-                  supabase.functions.invoke('verify-payment', {
-                    body: { sessionId: invoiceId },
-                  }).then(({ data }) => {
-                    if (data?.checkoutUrl) {
-                      window.open(data.checkoutUrl, '_blank');
-                    }
-                  });
+                  supabase.functions.invoke('verify-payment', { body: { sessionId: invoiceId } })
+                    .then(({ data }) => { if (data?.checkoutUrl) window.open(data.checkoutUrl, '_blank'); });
                 }
               }}
               className="w-full"
@@ -485,12 +433,8 @@ const DocumentRequest = () => {
               variant="ghost"
               onClick={() => {
                 setShowPaymentPendingModal(false);
-                if (pollingIntervalRef.current) {
-                  clearInterval(pollingIntervalRef.current);
-                }
-                if (realtimeChannelRef.current) {
-                  supabase.removeChannel(realtimeChannelRef.current);
-                }
+                if (pollingIntervalRef.current)  clearInterval(pollingIntervalRef.current);
+                if (realtimeChannelRef.current)  supabase.removeChannel(realtimeChannelRef.current);
                 setIsSubmitting(false);
               }}
               className="w-full"
