@@ -18,6 +18,52 @@ const PaymentSuccess = () => {
   const [requestId, setRequestId] = useState<string | null>(null);
   const [referenceNumber, setReferenceNumber] = useState<string | null>(null);
 
+  // ✅ Send confirmation email via send-request-email edge function
+  const sendConfirmationEmail = async (
+    to: string,
+    studentName: string,
+    contactNumber: string,
+    referenceNum: string,
+    documentLabels: string[],
+    totalAmount: number,
+    paymentMethod: string,
+  ) => {
+    if (!to) return;
+    try {
+      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/send-request-email`, {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${token}`,
+          'apikey':        supabaseAnonKey,
+        },
+        body: JSON.stringify({
+          to,
+          studentName,
+          contactNumber,
+          referenceNumber: referenceNum,
+          documents:       documentLabels,
+          quantities:      documentLabels.map(() => 1),
+          totalAmount,
+          paymentMethod,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        console.error('Email send failed:', result);
+      } else {
+        console.log('Confirmation email sent to:', to);
+      }
+    } catch (err) {
+      console.error('Failed to send confirmation email (non-critical):', err);
+    }
+  };
+
   useEffect(() => {
     const verifyPayment = async () => {
       // Try to get invoice_id or external_id from URL (survives cross-domain redirect)
@@ -141,15 +187,44 @@ const PaymentSuccess = () => {
           documentLabels
         );
 
-        // Send SMS notification
-        if (metadata.contactNumber) {
-          await smsService.notifyNewRequest(
-            metadata.contactNumber,
-            metadata.studentName,
-            formattedRequestId,
-            documentLabels
-          );
+        // ✅ Get student email from Supabase to send confirmation email
+        let studentEmail = '';
+        try {
+          const { data: studentData } = await supabase
+            .from('students')
+            .select('username')
+            .eq('user_id', metadata.userId)
+            .single();
+          studentEmail = studentData?.username || '';
+        } catch (err) {
+          console.error('Could not fetch student email:', err);
         }
+
+        // ✅ Send SMS and email in parallel (non-blocking)
+        await Promise.all([
+          // SMS
+          metadata.contactNumber
+            ? smsService.notifyNewRequest(
+                metadata.contactNumber,
+                metadata.studentName,
+                formattedRequestId,
+                documentLabels
+              )
+            : Promise.resolve(),
+
+          // ✅ Email — now included for online payments
+          studentEmail
+            ? sendConfirmationEmail(
+                studentEmail,
+                metadata.studentName,
+                metadata.contactNumber,
+                paymentRef,
+                documentLabels,
+                totalAmount,
+                metadata.paymentMethod,
+              )
+            : Promise.resolve(),
+        ]);
 
         // Clear the pending invoice from localStorage
         localStorage.removeItem('pending_xendit_invoice');
@@ -209,6 +284,13 @@ const PaymentSuccess = () => {
               <p className="text-sm text-muted-foreground">Request ID</p>
               <p className="text-xl font-bold text-primary">{requestId}</p>
             </div>
+          )}
+
+          {/* ✅ Added note about confirmation email */}
+          {status === 'success' && (
+            <p className="text-sm text-muted-foreground">
+              A confirmation email and SMS have been sent to you with your request details.
+            </p>
           )}
 
           <div className="pt-4 space-y-2">
