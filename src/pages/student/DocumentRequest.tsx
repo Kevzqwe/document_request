@@ -46,54 +46,80 @@ const DocumentRequest = () => {
     );
   };
 
-  // ✅ Send confirmation email via send-request-email edge function
+  // ── Send confirmation email using REAL reference number ───────────────────
   const sendConfirmationEmail = async (
     referenceNumber: string,
     documentLabels: string[],
     totalAmount: number,
+    method: string,
   ) => {
     if (!displayProfile.username) return;
-
     try {
-      const supabaseUrl    = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
       await fetch(`${supabaseUrl}/functions/v1/send-request-email`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type':  'application/json',
           'Authorization': `Bearer ${token}`,
-          'apikey': supabaseAnonKey,
+          'apikey':        supabaseAnonKey,
         },
         body: JSON.stringify({
           to:              displayProfile.username,
           studentName:     `${displayProfile.firstName} ${displayProfile.lastName}`.trim(),
           contactNumber:   displayProfile.contactNumber,
+          gradeLevel:      displayProfile.gradeLevel,
+          section:         displayProfile.section,
           referenceNumber,
           documents:       documentLabels,
-          quantities:      documentLabels.map(() => 1), // 1 copy each by default
+          quantities:      documentLabels.map(() => 1),
           totalAmount,
-          paymentMethod,
+          paymentMethod:   method,
         }),
       });
-
       console.log('Confirmation email sent to:', displayProfile.username);
     } catch (err) {
-      // Non-critical — don't block the flow
       console.error('Failed to send confirmation email:', err);
     }
   };
 
+  // ── Send SMS using REAL reference number ─────────────────────────────────
+  const sendConfirmationSms = async (
+    referenceNumber: string,
+    documentLabels: string[],
+    totalAmount: number,
+    method: string,
+  ) => {
+    if (!displayProfile.contactNumber) return;
+    const studentName = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
+    const paymentLabel = method === 'cash' ? 'Cash (Pay at School)' : 'Online Payment';
+    const message =
+      `PCS Document Request Confirmed!\n` +
+      `Ref #: ${referenceNumber}\n` +
+      `Student: ${studentName}\n` +
+      `Documents: ${documentLabels.join(', ')}\n` +
+      `Amount: PHP ${Number(totalAmount).toFixed(2)}\n` +
+      `Payment: ${paymentLabel}\n` +
+      `Please bring this reference # when claiming.`;
+
+    try {
+      await smsService.sendSms(displayProfile.contactNumber, message);
+    } catch (err) {
+      console.error('Failed to send SMS:', err);
+    }
+  };
+
+  // ── Cash payment ──────────────────────────────────────────────────────────
   const handleCashPayment = async () => {
     const documentLabels = selectedDocuments
       .map(v => documentUtils.getDocumentByValue(v)?.label)
       .filter(Boolean) as string[];
 
-    const totalAmount  = documentUtils.calculateTotal(selectedDocuments);
-    const studentName  = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
+    const totalAmount = documentUtils.calculateTotal(selectedDocuments);
+    const studentName = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
 
     const savedRequest = await saveRequestToDb({
       userId:        displayProfile.user_id,
@@ -113,27 +139,39 @@ const DocumentRequest = () => {
       return;
     }
 
-    const formattedId = `REQ-${String(savedRequest.request_number).padStart(3, '0')}`;
-    setSubmittedRequestId(formattedId);
-
-    // ✅ Send SMS notification
-    if (displayProfile.contactNumber) {
-      await smsService.notifyNewRequest(
-        displayProfile.contactNumber,
-        studentName,
-        formattedId,
-        documentLabels
-      );
+    // ── Fetch the REAL reference number from the payments table ───────────
+    let realReferenceNumber = '';
+    try {
+      // Wait briefly for DB trigger to generate the cash reference number
+      await new Promise(r => setTimeout(r, 800));
+      const { data: paymentData } = await supabase
+        .from('payments')
+        .select('reference_number')
+        .eq('request_id', savedRequest.id)
+        .single();
+      realReferenceNumber = paymentData?.reference_number || '';
+    } catch (err) {
+      console.error('Could not fetch reference number:', err);
     }
 
-    // ✅ Send email confirmation
-    await sendConfirmationEmail(formattedId, documentLabels, totalAmount);
+    // Fallback to request number if reference_number not yet generated
+    const formattedId = `REQ-${String(savedRequest.request_number).padStart(3, '0')}`;
+    const displayRef  = realReferenceNumber || formattedId;
+
+    setSubmittedRequestId(formattedId);
+
+    // ── Send SMS and email with REAL reference number ─────────────────────
+    await Promise.all([
+      sendConfirmationSms(displayRef, documentLabels, totalAmount, 'cash'),
+      sendConfirmationEmail(displayRef, documentLabels, totalAmount, 'cash'),
+    ]);
 
     setShowSuccessModal(true);
     setSelectedDocuments([]);
     setPaymentMethod('');
   };
 
+  // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (pollingIntervalRef.current)  clearInterval(pollingIntervalRef.current);
@@ -141,16 +179,49 @@ const DocumentRequest = () => {
     };
   }, []);
 
-  const startPaymentPolling = (invoiceId: string) => {
+  // ── Online payment polling ────────────────────────────────────────────────
+  const startPaymentPolling = (invoiceId: string, documentLabels: string[], totalAmount: number) => {
     pollingIntervalRef.current = setInterval(async () => {
       try {
         const { data, error } = await supabase.functions.invoke('verify-payment', {
           body: { sessionId: invoiceId },
         });
         if (error) { console.error('Polling error:', error); return; }
+
         if (data.verified) {
           if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
           setShowPaymentPendingModal(false);
+
+          // ── Fetch REAL reference number from payments table after confirmation
+          try {
+            await new Promise(r => setTimeout(r, 1000));
+            const { data: paymentData } = await supabase
+              .from('payments')
+              .select('reference_number, request_id')
+              .eq('reference_number', invoiceId)
+              .maybeSingle();
+
+            // Try by invoice id first, then by user's latest payment
+            let realRef = paymentData?.reference_number || '';
+            if (!realRef) {
+              const { data: latestPayment } = await supabase
+                .from('payments')
+                .select('reference_number')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+              realRef = latestPayment?.reference_number || invoiceId;
+            }
+
+            // Send email with real reference number
+            await Promise.all([
+              sendConfirmationEmail(realRef, documentLabels, totalAmount, 'online'),
+              sendConfirmationSms(realRef, documentLabels, totalAmount, 'online'),
+            ]);
+          } catch (emailErr) {
+            console.error('Post-payment notification error:', emailErr);
+          }
+
           navigate(`/payment-success?invoice_id=${invoiceId}`);
         }
       } catch (err) { console.error('Polling error:', err); }
@@ -158,7 +229,7 @@ const DocumentRequest = () => {
 
     realtimeChannelRef.current = supabase
       .channel('payment-updates')
-      .on('broadcast', { event: 'payment-confirmed' }, (payload) => {
+      .on('broadcast', { event: 'payment-confirmed' }, async (payload) => {
         if (payload.payload?.invoiceId === invoiceId) {
           if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
           setShowPaymentPendingModal(false);
@@ -168,13 +239,14 @@ const DocumentRequest = () => {
       .subscribe();
   };
 
+  // ── Online payment ────────────────────────────────────────────────────────
   const handleOnlinePayment = async () => {
     const documentLabels = selectedDocuments
       .map(v => documentUtils.getDocumentByValue(v)?.label)
       .filter(Boolean) as string[];
 
-    const totalAmount = documentUtils.calculateTotal(selectedDocuments);
-    const studentName = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
+    const totalAmount   = documentUtils.calculateTotal(selectedDocuments);
+    const studentName   = `${displayProfile.firstName} ${displayProfile.lastName}`.trim();
     const currentOrigin = window.location.origin;
 
     try {
@@ -200,12 +272,9 @@ const DocumentRequest = () => {
       const invoiceId = data.checkoutSessionId;
       localStorage.setItem('pending_xendit_invoice', invoiceId);
 
-      // ✅ Send email for online payment too (pending)
-      const refNumber = `REQ-ONL-${invoiceId.slice(-6).toUpperCase()}`;
-      await sendConfirmationEmail(refNumber, documentLabels, totalAmount);
-
+      // Start polling — email will be sent AFTER payment verified with real ref number
       setShowPaymentPendingModal(true);
-      startPaymentPolling(invoiceId);
+      startPaymentPolling(invoiceId, documentLabels, totalAmount);
       window.open(data.checkoutUrl, '_blank');
 
     } catch (err) {
@@ -231,7 +300,7 @@ const DocumentRequest = () => {
     }
   };
 
-  const totalAmount    = documentUtils.calculateTotal(selectedDocuments);
+  const totalAmount     = documentUtils.calculateTotal(selectedDocuments);
   const isOnlinePayment = paymentMethod === 'online';
 
   return (
@@ -257,7 +326,7 @@ const DocumentRequest = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <Label>Last Name</Label>
-                    <Input value={displayProfile.lastName} disabled className="bg-muted" />
+                    <Input value={displayProfile.lastName}  disabled className="bg-muted" />
                   </div>
                   <div className="space-y-2">
                     <Label>First Name</Label>
@@ -286,10 +355,7 @@ const DocumentRequest = () => {
                 <div className="space-y-3">
                   <Label className="text-base">Select Documents * (You can select multiple)</Label>
                   {DOCUMENT_TYPES.map((doc) => (
-                    <div
-                      key={doc.value}
-                      className="flex items-center space-x-3 p-4 border-2 rounded-lg hover:bg-muted/50 transition-colors"
-                    >
+                    <div key={doc.value} className="flex items-center space-x-3 p-4 border-2 rounded-lg hover:bg-muted/50 transition-colors">
                       <Checkbox
                         id={doc.value}
                         checked={selectedDocuments.includes(doc.value)}
@@ -331,10 +397,7 @@ const DocumentRequest = () => {
                 <RadioGroup value={paymentMethod} onValueChange={setPaymentMethod}>
                   <div className="space-y-3">
                     {PAYMENT_METHODS.map((method) => (
-                      <div
-                        key={method.value}
-                        className="flex items-center space-x-3 p-4 border-2 rounded-lg hover:bg-muted/50 transition-colors"
-                      >
+                      <div key={method.value} className="flex items-center space-x-3 p-4 border-2 rounded-lg hover:bg-muted/50 transition-colors">
                         <RadioGroupItem value={method.value} id={method.value} />
                         <Label htmlFor={method.value} className="flex-1 cursor-pointer">
                           <div className="font-medium">{method.label}</div>
@@ -381,22 +444,20 @@ const DocumentRequest = () => {
             </div>
             <DialogTitle className="text-center text-2xl">Request Submitted!</DialogTitle>
             <DialogDescription className="text-center text-base pt-2">
-              Your document request <span className="font-semibold text-primary">{submittedRequestId}</span> has been successfully submitted.
-              A confirmation email and SMS have been sent to you.
+              Your document request <span className="font-semibold text-primary">{submittedRequestId}</span> has been
+              successfully submitted. A confirmation email and SMS with your reference number have been sent to you.
               You can track the status in the Request History section.
             </DialogDescription>
           </DialogHeader>
-          <Button onClick={() => setShowSuccessModal(false)} className="w-full mt-4">
-            Close
-          </Button>
+          <Button onClick={() => setShowSuccessModal(false)} className="w-full mt-4">Close</Button>
         </DialogContent>
       </Dialog>
 
       {/* Payment Pending Modal */}
       <Dialog open={showPaymentPendingModal} onOpenChange={(open) => {
         if (!open) {
-          if (pollingIntervalRef.current)  clearInterval(pollingIntervalRef.current);
-          if (realtimeChannelRef.current)  supabase.removeChannel(realtimeChannelRef.current);
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+          if (realtimeChannelRef.current) supabase.removeChannel(realtimeChannelRef.current);
           setIsSubmitting(false);
         }
         setShowPaymentPendingModal(open);
@@ -412,6 +473,7 @@ const DocumentRequest = () => {
             <DialogDescription className="text-center text-base pt-2">
               A new tab has opened for you to complete the payment.
               This page will automatically update once your payment is confirmed.
+              A confirmation email and SMS will be sent once payment is verified.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-4">
@@ -433,8 +495,8 @@ const DocumentRequest = () => {
               variant="ghost"
               onClick={() => {
                 setShowPaymentPendingModal(false);
-                if (pollingIntervalRef.current)  clearInterval(pollingIntervalRef.current);
-                if (realtimeChannelRef.current)  supabase.removeChannel(realtimeChannelRef.current);
+                if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+                if (realtimeChannelRef.current) supabase.removeChannel(realtimeChannelRef.current);
                 setIsSubmitting(false);
               }}
               className="w-full"

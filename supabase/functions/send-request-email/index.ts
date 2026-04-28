@@ -12,20 +12,17 @@ function getCorsHeaders(req: Request) {
   };
 }
 
-// Estimate claim date: 3-5 business days from now
+// Estimate claim date: 5 business days from now
 function getClaimDate(): string {
   const date = new Date();
   let businessDaysAdded = 0;
   while (businessDaysAdded < 5) {
     date.setDate(date.getDate() + 1);
     const day = date.getDay();
-    if (day !== 0 && day !== 6) businessDaysAdded++; // skip Sunday (0) and Saturday (6)
+    if (day !== 0 && day !== 6) businessDaysAdded++;
   }
   return date.toLocaleDateString('en-PH', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
 }
 
@@ -46,9 +43,11 @@ Deno.serve(async (req) => {
       to,
       studentName,
       contactNumber,
+      gradeLevel,       // ← NEW
+      section,          // ← NEW
       referenceNumber,
-      documents,      // string[] of document names
-      quantities,     // Record<string, number> or number[] matching documents
+      documents,
+      quantities,
       totalAmount,
       paymentMethod,
     } = body;
@@ -60,9 +59,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    const claimDate = getClaimDate();
+    const claimDate    = getClaimDate();
+    const paymentLabel = paymentMethod === 'cash' ? 'Cash (Pay at School)' : 'Online Payment';
+    const gradeSection = gradeLevel && section ? `${gradeLevel} - ${section}` : gradeLevel || section || '—';
 
-    // Build document rows for the table
     const documentRows = documents.map((doc: string, i: number) => {
       const qty = Array.isArray(quantities) ? (quantities[i] ?? 1) : (quantities?.[doc] ?? 1);
       return `
@@ -72,19 +72,18 @@ Deno.serve(async (req) => {
         </tr>`;
     }).join('');
 
-    const paymentLabel = paymentMethod === 'cash' ? 'Cash (Pay at School)' : 'Online Payment';
-
     const transporter = createTransport({
       service: 'gmail',
       auth: { user: gmailUser, pass: gmailPassword },
     });
 
     await transporter.sendMail({
-      from: `PCS Document Request System <${gmailUser}>`,
+      from:    `PCS Document Request System <${gmailUser}>`,
       to,
       subject: `Document Request Confirmation - ${referenceNumber}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff;">
+
           <!-- Header -->
           <div style="background-color: #16a34a; padding: 30px; text-align: center;">
             <h1 style="color: white; margin: 0; font-size: 22px;">🎓 Pateros Catholic School</h1>
@@ -100,7 +99,9 @@ Deno.serve(async (req) => {
             <!-- Reference Number Banner -->
             <div style="background: #f0fdf4; border: 2px solid #16a34a; border-radius: 8px; padding: 16px; margin: 20px 0; text-align: center;">
               <p style="margin: 0; font-size: 13px; color: #6b7280;">Reference Number</p>
-              <p style="margin: 4px 0 0; font-size: 28px; font-weight: bold; color: #16a34a; letter-spacing: 2px;">${referenceNumber}</p>
+              <p style="margin: 4px 0 0; font-size: 26px; font-weight: bold; color: #16a34a; letter-spacing: 2px; word-break: break-all;">
+                ${referenceNumber}
+              </p>
             </div>
 
             <!-- Student Info -->
@@ -108,12 +109,16 @@ Deno.serve(async (req) => {
               <h3 style="color: #111827; margin: 0 0 12px; font-size: 16px;">📋 Request Details</h3>
               <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
                 <tr style="border-bottom: 1px solid #e5e7eb;">
-                  <td style="padding: 8px 0; color: #6b7280; width: 140px;">Student Name:</td>
+                  <td style="padding: 8px 0; color: #6b7280; width: 150px;">Student Name:</td>
                   <td style="padding: 8px 0; color: #111827; font-weight: 500;">${studentName}</td>
                 </tr>
                 <tr style="border-bottom: 1px solid #e5e7eb;">
                   <td style="padding: 8px 0; color: #6b7280;">Contact Number:</td>
                   <td style="padding: 8px 0; color: #111827; font-weight: 500;">${contactNumber || '—'}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 8px 0; color: #6b7280;">Grade & Section:</td>
+                  <td style="padding: 8px 0; color: #111827; font-weight: 500;">${gradeSection}</td>
                 </tr>
                 <tr style="border-bottom: 1px solid #e5e7eb;">
                   <td style="padding: 8px 0; color: #6b7280;">Payment Method:</td>
