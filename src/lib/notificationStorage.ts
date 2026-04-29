@@ -1,13 +1,14 @@
-// Notification storage utilities using localStorage
+// Notification storage — backed by Supabase for real-time support
+import { supabase } from '@/integrations/supabase/client';
 
 export interface StoredNotification {
   id: string;
-  userId: string; // 'admin' for admin notifications, or specific user ID
+  userId: string;
   title: string;
   message: string;
   time: string;
   unread: boolean;
-  type: 'request' | 'status' | 'announcement' | 'feedback';
+  type: 'request' | 'status' | 'announcement' | 'feedback' | 'payment';
   requestId?: string;
   feedbackId?: string;
   feedbackData?: {
@@ -18,178 +19,216 @@ export interface StoredNotification {
   };
 }
 
-const NOTIFICATIONS_KEY = 'notifications';
+// ── Map DB row → StoredNotification ──────────────────────────────────────────
+const mapRow = (row: any): StoredNotification => ({
+  id:           row.id,
+  userId:       row.user_id,
+  title:        row.title,
+  message:      row.message,
+  time:         row.created_at,
+  unread:       !row.is_read,
+  type:         row.type,
+  requestId:    row.request_id   ?? undefined,
+  feedbackId:   row.feedback_id  ?? undefined,
+  feedbackData: row.feedback_data ?? undefined,
+});
 
-// Generate unique notification ID
-const generateNotificationId = (): string => {
-  return `notif-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-};
+// ── Fetch notifications for a user ────────────────────────────────────────────
+const getByUser = async (userId: string, isAdmin = false): Promise<StoredNotification[]> => {
+  let query = supabase
+    .from('notifications')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(30);
 
-// Get all notifications from localStorage
-export const getAllNotifications = (): StoredNotification[] => {
-  try {
-    const stored = localStorage.getItem(NOTIFICATIONS_KEY);
-    return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
+  if (isAdmin) {
+    query = query.in('user_id', [userId, 'admin']);
+  } else {
+    query = query.eq('user_id', userId);
   }
+
+  const { data, error } = await query;
+  if (error) { console.error('getByUser error:', error.message); return []; }
+  return (data || []).map(mapRow);
 };
 
-// Get notifications for a specific user (includes 'admin' for admin users)
-export const getUserNotifications = (userId: string, isAdmin: boolean = false): StoredNotification[] => {
-  const allNotifications = getAllNotifications();
-  const userNotifications = allNotifications.filter(
-    (n) => n.userId === userId || (isAdmin && n.userId === 'admin')
-  );
-  return userNotifications.sort(
-    (a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()
-  );
-};
-
-// Add a new notification
-export const addNotification = (
+// ── Add a notification ────────────────────────────────────────────────────────
+const add = async (
   notification: Omit<StoredNotification, 'id' | 'time' | 'unread'>
-): StoredNotification => {
-  const notifications = getAllNotifications();
-  const newNotification: StoredNotification = {
-    ...notification,
-    id: generateNotificationId(),
-    time: new Date().toISOString(),
-    unread: true,
-  };
-  notifications.unshift(newNotification);
-  localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
-  return newNotification;
+): Promise<void> => {
+  const { error } = await supabase.from('notifications').insert({
+    user_id:       notification.userId,
+    title:         notification.title,
+    message:       notification.message,
+    type:          notification.type,
+    request_id:    notification.requestId    ?? null,
+    feedback_id:   notification.feedbackId   ?? null,
+    feedback_data: notification.feedbackData ?? null,
+    is_read:       false,
+  });
+  if (error) console.error('add notification error:', error.message);
 };
 
-// Create notifications for new request (both student and admin)
-export const createRequestNotifications = (
+// ── Create request notifications (student + admin) ────────────────────────────
+const createRequestNotifications = async (
   requestId: string,
   studentUserId: string,
   studentName: string,
-  documentNames: string[]
-): void => {
+  documentNames: string[],
+): Promise<void> => {
   const documentList = documentNames.join(', ');
-  
-  // Notification for student
-  addNotification({
-    userId: studentUserId,
-    title: 'Request Submitted',
-    message: `Your request for ${documentList} has been submitted and is being processed.`,
-    type: 'request',
-    requestId,
-  });
-
-  // Notification for admin
-  addNotification({
-    userId: 'admin',
-    title: 'New Document Request',
-    message: `${studentName} requested: ${documentList}`,
-    type: 'request',
-    requestId,
-  });
+  await Promise.all([
+    add({
+      userId:    studentUserId,
+      title:     'Request Submitted',
+      message:   `Your request for ${documentList} has been submitted and is being processed.`,
+      type:      'request',
+      requestId,
+    }),
+    add({
+      userId:    'admin',
+      title:     'New Document Request',
+      message:   `${studentName} requested: ${documentList}`,
+      type:      'request',
+      requestId,
+    }),
+  ]);
 };
 
-// Create notification for status update
-export const createStatusNotification = (
+// ── Create status update notification ────────────────────────────────────────
+const createStatusNotification = async (
   requestId: string,
   studentUserId: string,
   newStatus: string,
-  documentNames: string[]
-): void => {
+  documentNames: string[],
+): Promise<void> => {
   const documentList = documentNames.join(', ');
-  
-  addNotification({
-    userId: studentUserId,
-    title: `Request ${newStatus}`,
-    message: `Your request for ${documentList} is now ${newStatus}.`,
-    type: 'status',
+  await add({
+    userId:    studentUserId,
+    title:     `Request ${newStatus}`,
+    message:   `Your request for ${documentList} is now ${newStatus}.`,
+    type:      'status',
     requestId,
   });
 };
 
-// Create notification for new feedback (admin only)
-export const createFeedbackNotification = (
+// ── Create payment notification ───────────────────────────────────────────────
+const createPaymentNotification = async (
+  requestId: string,
+  studentUserId: string,
+  studentName: string,
+  status: 'paid' | 'pending',
+): Promise<void> => {
+  await Promise.all([
+    add({
+      userId:    studentUserId,
+      title:     status === 'paid' ? 'Payment Confirmed' : 'Payment Pending',
+      message:   status === 'paid'
+        ? `Your payment for request ${requestId} has been confirmed.`
+        : `Payment for request ${requestId} is pending.`,
+      type:      'payment',
+      requestId,
+    }),
+    add({
+      userId:    'admin',
+      title:     status === 'paid' ? 'Payment Received' : 'Payment Pending',
+      message:   status === 'paid'
+        ? `${studentName}'s payment for request ${requestId} has been confirmed.`
+        : `${studentName}'s payment for request ${requestId} is pending.`,
+      type:      'payment',
+      requestId,
+    }),
+  ]);
+};
+
+// ── Create feedback notification (admin only) ─────────────────────────────────
+const createFeedbackNotification = async (
   feedbackId: string,
   studentUserId: string,
   studentName: string,
   email: string,
   messageType: string,
-  message: string
-): void => {
-  addNotification({
-    userId: 'admin',
-    title: 'New Feedback Received',
-    message: `${studentName} sent a ${messageType}: "${message.substring(0, 50)}${message.length > 50 ? '...' : ''}"`,
-    type: 'feedback',
+  message: string,
+): Promise<void> => {
+  await add({
+    userId:    'admin',
+    title:     'New Feedback Received',
+    message:   `${studentName} sent a ${messageType}: "${message.substring(0, 50)}${message.length > 50 ? '...' : ''}"`,
+    type:      'feedback',
     feedbackId,
-    feedbackData: {
-      email,
-      messageType,
-      message,
-      studentName,
-    },
+    feedbackData: { email, messageType, message, studentName },
   });
 };
 
-// Mark notification as read
-export const markAsRead = (notificationId: string): void => {
-  const notifications = getAllNotifications();
-  const index = notifications.findIndex(n => n.id === notificationId);
-  if (index !== -1) {
-    notifications[index].unread = false;
-    localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
+// ── Mark single notification as read ─────────────────────────────────────────
+const markAsRead = async (notificationId: string): Promise<void> => {
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('id', notificationId);
+  if (error) console.error('markAsRead error:', error.message);
+};
+
+// ── Mark all as read for a user ───────────────────────────────────────────────
+const markAllAsRead = async (userId: string, isAdmin = false): Promise<void> => {
+  let query = supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('is_read', false);
+
+  if (isAdmin) {
+    query = query.in('user_id', [userId, 'admin']);
+  } else {
+    query = query.eq('user_id', userId);
   }
+
+  const { error } = await query;
+  if (error) console.error('markAllAsRead error:', error.message);
 };
 
-// Mark all notifications as read for a user
-export const markAllAsRead = (userId: string, isAdmin: boolean = false): void => {
-  const notifications = getAllNotifications();
-  notifications.forEach(n => {
-    if (n.userId === userId || (isAdmin && n.userId === 'admin')) {
-      n.unread = false;
-    }
-  });
-  localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
+// ── Get unread count ──────────────────────────────────────────────────────────
+const getUnreadCount = async (userId: string, isAdmin = false): Promise<number> => {
+  let query = supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('is_read', false);
+
+  if (isAdmin) {
+    query = query.in('user_id', [userId, 'admin']);
+  } else {
+    query = query.eq('user_id', userId);
+  }
+
+  const { count, error } = await query;
+  if (error) { console.error('getUnreadCount error:', error.message); return 0; }
+  return count ?? 0;
 };
 
-// Get unread count for a user
-export const getUnreadCount = (userId: string, isAdmin: boolean = false): number => {
-  const notifications = getUserNotifications(userId, isAdmin);
-  return notifications.filter(n => n.unread).length;
-};
-
-// Clear all notifications (for development)
-export const clearAllNotifications = (): void => {
-  localStorage.removeItem(NOTIFICATIONS_KEY);
-};
-
-// Format relative time
+// ── Format relative time ──────────────────────────────────────────────────────
 export const formatRelativeTime = (dateString: string): string => {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
+  const date    = new Date(dateString);
+  const now     = new Date();
+  const diffMs  = now.getTime() - date.getTime();
+  const diffMins  = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+  const diffDays  = Math.floor(diffMs / 86400000);
 
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+  if (diffMins  < 1)  return 'Just now';
+  if (diffMins  < 60) return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
   if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
-  if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+  if (diffDays  < 7)  return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
   return date.toLocaleDateString();
 };
 
 export const notificationStorage = {
-  getAll: getAllNotifications,
-  getByUser: getUserNotifications,
-  add: addNotification,
+  getByUser,
+  add,
   createRequestNotifications,
   createStatusNotification,
+  createPaymentNotification,
   createFeedbackNotification,
   markAsRead,
   markAllAsRead,
   getUnreadCount,
   formatRelativeTime,
-  clear: clearAllNotifications,
 };
