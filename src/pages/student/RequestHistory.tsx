@@ -7,24 +7,16 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
+  Pagination, PaginationContent, PaginationItem,
+  PaginationLink, PaginationNext, PaginationPrevious,
 } from '@/components/ui/pagination';
-import { History, Eye, Archive, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { History, Eye, Archive, ChevronDown, ChevronUp, Loader2, CheckCircle2, Clock } from 'lucide-react';
 import { usePagination } from '@/hooks/usePagination';
 import TrackingStepper from '@/components/TrackingStepper';
 import { trackingUtils } from '@/lib/tracking';
 import { supabase } from '@/integrations/supabase/client';
-import { DOCUMENT_TYPES } from '@/lib/documents';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 
 interface RequestDisplay {
@@ -35,6 +27,7 @@ interface RequestDisplay {
   requestDate: string;
   status: string;
   paymentMethod: string;
+  paymentStatus: string;   // ← NEW
   amount: string;
   gradeLevel: string;
   section: string;
@@ -48,30 +41,24 @@ const RequestHistory = () => {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const filterParam = searchParams.get('filter');
-  const [activeRequests, setActiveRequests] = useState<RequestDisplay[]>([]);
+  const [activeRequests, setActiveRequests]     = useState<RequestDisplay[]>([]);
   const [archivedRequests, setArchivedRequests] = useState<RequestDisplay[]>([]);
-  const [selectedRequest, setSelectedRequest] = useState<RequestDisplay | null>(null);
+  const [selectedRequest, setSelectedRequest]   = useState<RequestDisplay | null>(null);
   const [notifyOnDelivery, setNotifyOnDelivery] = useState(false);
-  const [showArchive, setShowArchive] = useState(filterParam === 'completed');
-  const [loading, setLoading] = useState(true);
+  const [showArchive, setShowArchive]           = useState(filterParam === 'completed');
+  const [loading, setLoading]                   = useState(true);
 
   const fetchRequests = async () => {
     if (!user?.id) return;
-    
     try {
-      // Fetch requests with items
       const { data: requests, error } = await supabase
         .from('document_requests')
         .select('*, document_request_items(*)')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('Error fetching requests:', error);
-        return;
-      }
+      if (error) { console.error('Error fetching requests:', error); return; }
 
-      // Fetch payments for these requests
       const requestIds = (requests || []).map(r => r.id);
       let paymentsMap: Record<string, any> = {};
       if (requestIds.length > 0) {
@@ -85,26 +72,27 @@ const RequestHistory = () => {
       }
 
       const mapped: RequestDisplay[] = (requests || []).map(req => {
-        const items = req.document_request_items || [];
-        const payment = paymentsMap[req.id];
+        const items      = req.document_request_items || [];
+        const payment    = paymentsMap[req.id];
         const totalAmount = items.reduce((sum: number, item: any) => sum + Number(item.price), 0);
         const formattedId = `REQ-${String(req.request_number).padStart(3, '0')}`;
 
         return {
-          id: formattedId,
-          requestNumber: req.request_number,
-          studentName: req.student_name,
-          documents: items.map((item: any) => item.document_type),
-          requestDate: req.created_at,
-          status: req.status,
-          paymentMethod: req.payment_method,
-          amount: `₱${totalAmount.toLocaleString()}.00`,
-          gradeLevel: req.grade_level,
-          section: req.section,
-          contactNumber: req.contact_number,
-          claimDate: req.status === 'Completed' ? req.updated_at.split('T')[0] : 'TBA',
+          id:              formattedId,
+          requestNumber:   req.request_number,
+          studentName:     req.student_name,
+          documents:       items.map((item: any) => item.document_type),
+          requestDate:     req.created_at,
+          status:          req.status,
+          paymentMethod:   req.payment_method,
+          paymentStatus:   payment?.payment_status || 'pending',
+          amount:          `₱${totalAmount.toLocaleString()}.00`,
+          gradeLevel:      req.grade_level,
+          section:         req.section,
+          contactNumber:   req.contact_number,
+          claimDate:       req.status === 'Completed' ? req.updated_at.split('T')[0] : 'TBA',
           referenceNumber: payment?.reference_number || null,
-          paidAt: payment?.paid_at || null,
+          paidAt:          payment?.paid_at || null,
         };
       });
 
@@ -120,33 +108,42 @@ const RequestHistory = () => {
   useEffect(() => {
     fetchRequests();
 
-    // Subscribe to realtime changes
     const channel = supabase
       .channel('request-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'document_requests' }, () => {
-        fetchRequests();
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'document_requests' }, fetchRequests)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, fetchRequests)
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
 
-  // Apply filter from query params
   const filteredActiveRequests = filterParam === 'approved'
     ? activeRequests.filter(r => r.status === 'Approved' || r.status === 'Ready')
     : filterParam === 'pending'
     ? activeRequests.filter(r => r.status === 'Processing' || r.status === 'pending')
     : activeRequests;
 
-  const activePagination = usePagination({ data: filteredActiveRequests, itemsPerPage: 3 });
-  const archivedPagination = usePagination({ data: archivedRequests, itemsPerPage: 3 });
+  const activePagination   = usePagination({ data: filteredActiveRequests, itemsPerPage: 3 });
+  const archivedPagination = usePagination({ data: archivedRequests,       itemsPerPage: 3 });
 
-  const clearFilter = () => {
-    setSearchParams({});
-  };
+  const clearFilter = () => setSearchParams({});
 
-  const handleViewDetails = (request: RequestDisplay) => {
-    setSelectedRequest(request);
+  // ── Payment status badge ──────────────────────────────────────────────────
+  const PaymentBadge = ({ status, method }: { status: string; method: string }) => {
+    const isPaid = status?.toLowerCase() === 'paid';
+    return (
+      <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border ${
+        isPaid
+          ? 'bg-green-50 text-green-700 border-green-200'
+          : 'bg-amber-50 text-amber-700 border-amber-200'
+      }`}>
+        {isPaid
+          ? <CheckCircle2 className="w-3.5 h-3.5" />
+          : <Clock         className="w-3.5 h-3.5" />
+        }
+        {isPaid ? 'Paid' : `Unpaid (${method === 'cash' ? 'Cash' : 'Online'})`}
+      </span>
+    );
   };
 
   if (loading) {
@@ -205,6 +202,7 @@ const RequestHistory = () => {
               </Button>
             </div>
           )}
+
           {filteredActiveRequests.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               No active requests. All completed requests are in the archive.
@@ -213,11 +211,16 @@ const RequestHistory = () => {
             <>
               {activePagination.currentData.map((request) => (
                 <Card key={request.id} className="border-2 overflow-hidden">
-                  <div className="bg-foreground text-background px-4 py-3 text-center">
+                  {/* ── Header bar ────────────────────────────────────────── */}
+                  <div className="bg-foreground text-background px-4 py-3 flex items-center justify-between flex-wrap gap-2">
                     <h3 className="font-semibold text-lg">
                       TRACKING ORDER NO - {request.id}
                     </h3>
+                    {/* Payment status badge in header */}
+                    <PaymentBadge status={request.paymentStatus} method={request.paymentMethod} />
                   </div>
+
+                  {/* ── Info row ──────────────────────────────────────────── */}
                   <div className="flex flex-wrap justify-between items-center px-4 py-3 bg-muted/50 border-b text-sm gap-2">
                     <span>
                       <span className="text-muted-foreground">Document:</span>{' '}
@@ -236,9 +239,13 @@ const RequestHistory = () => {
                       </span>
                     </span>
                   </div>
+
+                  {/* ── Tracking stepper ──────────────────────────────────── */}
                   <div className="px-4 md:px-8 py-6">
                     <TrackingStepper status={request.status} />
                   </div>
+
+                  {/* ── Footer ────────────────────────────────────────────── */}
                   <div className="flex flex-wrap justify-between items-center px-4 py-3 border-t gap-4">
                     <div className="flex items-center space-x-2">
                       <Checkbox
@@ -256,7 +263,7 @@ const RequestHistory = () => {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => handleViewDetails(request)}
+                      onClick={() => setSelectedRequest(request)}
                       className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
                     >
                       <Eye className="w-4 h-4 mr-2" />
@@ -270,22 +277,15 @@ const RequestHistory = () => {
                 <div className="mt-4">
                   <Pagination>
                     <PaginationContent>
-                      <PaginationItem>
-                        <PaginationPrevious onClick={activePagination.goToPreviousPage} />
-                      </PaginationItem>
+                      <PaginationItem><PaginationPrevious onClick={activePagination.goToPreviousPage} /></PaginationItem>
                       {[...Array(activePagination.totalPages)].map((_, i) => (
                         <PaginationItem key={i}>
-                          <PaginationLink
-                            onClick={() => activePagination.goToPage(i + 1)}
-                            isActive={activePagination.currentPage === i + 1}
-                          >
+                          <PaginationLink onClick={() => activePagination.goToPage(i + 1)} isActive={activePagination.currentPage === i + 1}>
                             {i + 1}
                           </PaginationLink>
                         </PaginationItem>
                       ))}
-                      <PaginationItem>
-                        <PaginationNext onClick={activePagination.goToNextPage} />
-                      </PaginationItem>
+                      <PaginationItem><PaginationNext onClick={activePagination.goToNextPage} /></PaginationItem>
                     </PaginationContent>
                   </Pagination>
                 </div>
@@ -295,12 +295,9 @@ const RequestHistory = () => {
         </CardContent>
       </Card>
 
-      {/* Archived Requests */}
+      {/* ── Archived Requests ─────────────────────────────────────────────── */}
       <Card className="border-2 shadow-lg">
-        <CardHeader
-          className="cursor-pointer bg-muted/30"
-          onClick={() => setShowArchive(!showArchive)}
-        >
+        <CardHeader className="cursor-pointer bg-muted/30" onClick={() => setShowArchive(!showArchive)}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-muted rounded-lg flex items-center justify-center">
@@ -308,9 +305,7 @@ const RequestHistory = () => {
               </div>
               <div>
                 <CardTitle className="text-lg">Archived Requests</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Completed requests are stored here
-                </p>
+                <p className="text-sm text-muted-foreground">Completed requests are stored here</p>
               </div>
               <Badge variant="secondary">{archivedRequests.length}</Badge>
             </div>
@@ -327,8 +322,9 @@ const RequestHistory = () => {
               <>
                 {archivedPagination.currentData.map((request) => (
                   <Card key={request.id} className="border-2 overflow-hidden opacity-80">
-                    <div className="bg-foreground/80 text-background px-4 py-3 text-center">
+                    <div className="bg-foreground/80 text-background px-4 py-3 flex items-center justify-between flex-wrap gap-2">
                       <h3 className="font-semibold text-lg">COMPLETED ORDER - {request.id}</h3>
+                      <PaymentBadge status={request.paymentStatus} method={request.paymentMethod} />
                     </div>
                     <div className="flex flex-wrap justify-between items-center px-4 py-3 bg-muted/50 border-b text-sm gap-2">
                       <span>
@@ -348,7 +344,7 @@ const RequestHistory = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleViewDetails(request)}
+                        onClick={() => setSelectedRequest(request)}
                         className="border-muted-foreground/50"
                       >
                         <Eye className="w-4 h-4 mr-2" />
@@ -362,22 +358,15 @@ const RequestHistory = () => {
                   <div className="mt-4">
                     <Pagination>
                       <PaginationContent>
-                        <PaginationItem>
-                          <PaginationPrevious onClick={archivedPagination.goToPreviousPage} />
-                        </PaginationItem>
+                        <PaginationItem><PaginationPrevious onClick={archivedPagination.goToPreviousPage} /></PaginationItem>
                         {[...Array(archivedPagination.totalPages)].map((_, i) => (
                           <PaginationItem key={i}>
-                            <PaginationLink
-                              onClick={() => archivedPagination.goToPage(i + 1)}
-                              isActive={archivedPagination.currentPage === i + 1}
-                            >
+                            <PaginationLink onClick={() => archivedPagination.goToPage(i + 1)} isActive={archivedPagination.currentPage === i + 1}>
                               {i + 1}
                             </PaginationLink>
                           </PaginationItem>
                         ))}
-                        <PaginationItem>
-                          <PaginationNext onClick={archivedPagination.goToNextPage} />
-                        </PaginationItem>
+                        <PaginationItem><PaginationNext onClick={archivedPagination.goToNextPage} /></PaginationItem>
                       </PaginationContent>
                     </Pagination>
                   </div>
@@ -388,6 +377,7 @@ const RequestHistory = () => {
         )}
       </Card>
 
+      {/* ── Help card ─────────────────────────────────────────────────────── */}
       <Card className="border-2">
         <CardContent className="pt-6">
           <div className="flex items-center gap-4 p-4 bg-primary/10 rounded-lg border-2 border-primary/30">
@@ -402,7 +392,7 @@ const RequestHistory = () => {
         </CardContent>
       </Card>
 
-      {/* Order Details Dialog */}
+      {/* ── Order Details Dialog ───────────────────────────────────────────── */}
       <Dialog open={!!selectedRequest} onOpenChange={() => setSelectedRequest(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -410,6 +400,35 @@ const RequestHistory = () => {
           </DialogHeader>
           {selectedRequest && (
             <div className="space-y-4">
+              {/* Payment status prominent display */}
+              <div className={`flex items-center gap-3 p-3 rounded-lg border ${
+                selectedRequest.paymentStatus?.toLowerCase() === 'paid'
+                  ? 'bg-green-50 border-green-200'
+                  : 'bg-amber-50 border-amber-200'
+              }`}>
+                {selectedRequest.paymentStatus?.toLowerCase() === 'paid'
+                  ? <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0" />
+                  : <Clock         className="w-5 h-5 text-amber-600 shrink-0" />
+                }
+                <div>
+                  <p className={`font-semibold text-sm ${
+                    selectedRequest.paymentStatus?.toLowerCase() === 'paid' ? 'text-green-700' : 'text-amber-700'
+                  }`}>
+                    {selectedRequest.paymentStatus?.toLowerCase() === 'paid' ? 'Payment Confirmed' : 'Payment Pending'}
+                  </p>
+                  {selectedRequest.paidAt && (
+                    <p className="text-xs text-green-600">
+                      Paid on {new Date(selectedRequest.paidAt).toLocaleString()}
+                    </p>
+                  )}
+                  {selectedRequest.referenceNumber && (
+                    <p className="text-xs text-muted-foreground font-mono break-all">
+                      Ref: {selectedRequest.referenceNumber}
+                    </p>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-muted-foreground">Document(s):</span>
@@ -429,16 +448,14 @@ const RequestHistory = () => {
                 </div>
                 <div>
                   <span className="text-muted-foreground">Payment Method:</span>
-                  <p className="font-medium">{selectedRequest.paymentMethod}</p>
+                  <p className="font-medium capitalize">{selectedRequest.paymentMethod}</p>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Amount:</span>
                   <p className="font-medium">{selectedRequest.amount}</p>
                 </div>
               </div>
-              <Button onClick={() => setSelectedRequest(null)} className="w-full">
-                Close
-              </Button>
+              <Button onClick={() => setSelectedRequest(null)} className="w-full">Close</Button>
             </div>
           )}
         </DialogContent>
