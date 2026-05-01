@@ -11,83 +11,90 @@ interface AuthContextType {
   refreshProfile: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
-  setIgnoreNextSignOut: (value: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within an AuthProvider');
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
   return context;
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser]           = useState<AuthUser | null>(null);
-  const [profile, setProfile]     = useState<UserProfile | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
+  const initialized = useRef(false); // ✅ guard against double fetch on mount
 
-  const initialized       = useRef(false);
-  const ignoreNextSignOut = useRef(false);
-
-  const setIgnoreNextSignOut = (value: boolean) => {
-    ignoreNextSignOut.current = value;
-  };
-
-  const clearAuthState = (redirect = true) => {
+  // ✅ Helper: clear all auth state and redirect to login
+  const clearAuthState = async (redirect = true) => {
     setUser(null);
     setProfile(null);
     setIsLoading(false);
     if (redirect) navigate('/');
   };
 
+  // ✅ Helper: set user + fetch profile from a session user object
   const hydrateUserFromSession = async (sessionUser: { id: string; email?: string | null }) => {
-    const authUser: AuthUser = { id: sessionUser.id, email: sessionUser.email || '' };
+    const authUser: AuthUser = {
+      id: sessionUser.id,
+      email: sessionUser.email || '',
+    };
     setUser(authUser);
+
     const userProfile = await fetchUserProfile(sessionUser.id);
     setProfile(userProfile);
     setIsLoading(false);
+
     return userProfile;
   };
 
   useEffect(() => {
+    // ✅ Step 1: Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
+        // Skip duplicate handling before getSession() initializes
         if (!initialized.current) return;
 
-        if (event === 'SIGNED_OUT' || (event === 'TOKEN_REFRESHED' && !session)) {
-          // Pre-OTP intentional sign-out from Login.tsx — skip redirect
-          if (ignoreNextSignOut.current) {
-            ignoreNextSignOut.current = false;
-            return;
-          }
-          clearAuthState();
+        // ✅ Handle token expiry / sign out events
+        if (
+          event === 'SIGNED_OUT' ||
+          (event === 'TOKEN_REFRESHED' && !session)
+        ) {
+          await clearAuthState();
           return;
         }
 
-        if (event === 'PASSWORD_RECOVERY') return;
+        // ✅ Handle password recovery or user updates
+        if (event === 'PASSWORD_RECOVERY') {
+          return;
+        }
 
         if (session?.user) {
+          // Use setTimeout to avoid Supabase internal deadlock
           setTimeout(async () => {
             await hydrateUserFromSession(session.user);
           }, 0);
         } else {
-          clearAuthState();
+          await clearAuthState();
         }
       }
     );
 
+    // ✅ Step 2: Check existing session on mount
     const initSession = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
 
         if (error) {
-          console.warn('Stale session, clearing:', error.message);
-          ignoreNextSignOut.current = true;
+          console.error('Session retrieval error:', error.message);
+          // ✅ Clear any stale/corrupted tokens
           await supabase.auth.signOut();
-          ignoreNextSignOut.current = false;
-          setIsLoading(false);
+          await clearAuthState();
           return;
         }
 
@@ -97,13 +104,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsLoading(false);
         }
       } catch (err) {
-        console.error('Session init error:', err);
-        ignoreNextSignOut.current = true;
+        console.error('Unexpected error during session init:', err);
         await supabase.auth.signOut();
-        ignoreNextSignOut.current = false;
-        setIsLoading(false);
+        await clearAuthState();
       } finally {
-        initialized.current = true;
+        initialized.current = true; // ✅ Allow onAuthStateChange to process future events
       }
     };
 
@@ -115,11 +120,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string): Promise<{ error: string | null }> => {
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) return { error: error.message };
+
+      if (error) {
+        return { error: error.message };
+      }
 
       if (data.user) {
         const userProfile = await hydrateUserFromSession(data.user);
-        if (userProfile) navigate(getRedirectPath(userProfile.role));
+
+        if (userProfile) {
+          const redirectPath = getRedirectPath(userProfile.role);
+          navigate(redirectPath);
+        }
       }
 
       return { error: null };
@@ -131,6 +143,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshProfile = async () => {
     if (!user) return;
+
     try {
       const userProfile = await fetchUserProfile(user.id);
       setProfile(userProfile);
@@ -145,6 +158,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
+      // ✅ Always clear state even if signOut fails
       setUser(null);
       setProfile(null);
       navigate('/');
@@ -152,16 +166,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{
-      user,
-      profile,
-      login,
-      logout,
-      refreshProfile,
-      isAuthenticated: !!user,
-      isLoading,
-      setIgnoreNextSignOut,
-    }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        profile,
+        login,
+        logout,
+        refreshProfile,
+        isAuthenticated: !!user,
+        isLoading,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
