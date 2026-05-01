@@ -17,7 +17,7 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
 
-  const { isAuthenticated, profile, isLoading: authLoading } = useAuth();
+  const { isAuthenticated, profile, isLoading: authLoading, setIgnoreNextSignOut } = useAuth();
   const navigate  = useNavigate();
   const { toast } = useToast();
 
@@ -48,10 +48,13 @@ const Login = () => {
       const userProfile   = await fetchUserProfile(userId);
       const contactNumber = userProfile?.contactNumber || '';
 
-      // Sign out immediately — full session only after OTP
+      // Step 2 — sign out immediately (full session only after OTP)
+      // Flag AuthContext so SIGNED_OUT event doesn't redirect to '/'
+      setIgnoreNextSignOut(true);
       await supabase.auth.signOut();
+      setIgnoreNextSignOut(false);
 
-      // Step 2 — send OTP
+      // Step 3 — send OTP
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -65,7 +68,6 @@ const Login = () => {
 
       if (!res.ok) {
         if (otpData.locked) {
-          // Redirect to OTP page anyway so the lock timer is visible
           navigate('/otp-verify', {
             state: {
               userId,
@@ -84,12 +86,12 @@ const Login = () => {
 
       toast({ title: 'OTP Sent', description: otpData.message });
 
-      // Step 3 — navigate to OTP page, pass state (no sensitive data in URL)
+      // Step 4 — navigate to OTP page
       navigate('/otp-verify', {
         state: {
           userId,
           email,
-          password,       // needed to complete login after OTP
+          password,
           contactNumber,
           expiresAt: otpData.expiresAt,
         },
