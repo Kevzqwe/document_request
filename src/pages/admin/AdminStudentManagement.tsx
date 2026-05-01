@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   Search, Upload, Plus, Edit2, Loader2, Users, FileSpreadsheet,
-  AlertTriangle, CheckCircle2, Archive, ArchiveRestore, ChevronDown, ChevronUp,
+  AlertTriangle, CheckCircle2, Archive, ArchiveRestore, ChevronDown, ChevronUp, Download,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -159,6 +159,24 @@ const AdminStudentManagement = () => {
     return existing
       ? `A student with email "${email}" already exists (${existing.first_name} ${existing.last_name}).`
       : null;
+  };
+
+  const handleDownloadTemplate = () => {
+    const templateData = [
+      {
+        email: 'student@example.com',
+        first_name: 'Juan',
+        last_name: 'Dela Cruz',
+        middle_name: 'Santos',
+        contact_number: '09123456789',
+        grade_level: '10',
+        section: 'A',
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Students');
+    XLSX.writeFile(wb, 'student_import_template.xlsx');
   };
 
   const handleAddStudent = async () => {
@@ -416,6 +434,9 @@ const AdminStudentManagement = () => {
         </div>
         {isAdmin && (
           <div className="flex gap-2 flex-wrap">
+            <Button variant="outline" onClick={handleDownloadTemplate}>
+              <Download className="w-4 h-4 mr-2" />Download Template
+            </Button>
             <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
               <Upload className="w-4 h-4 mr-2" />Import Excel
             </Button>
