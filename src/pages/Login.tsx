@@ -8,24 +8,23 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { Lock, Mail, Eye, EyeOff, Loader2 } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
+import { supabase } from '@/integrations/supabase/client';
+import { fetchUserProfile, getRedirectPath } from '@/lib/auth';
 
 const Login = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  
-  const { login, isAuthenticated, profile, isLoading: authLoading } = useAuth();
-  const navigate = useNavigate();
+  const [isLoading, setIsLoading]       = useState(false);
+
+  const { isAuthenticated, profile, isLoading: authLoading } = useAuth();
+  const navigate  = useNavigate();
   const { toast } = useToast();
 
+  // Already authenticated — go to dashboard
   useEffect(() => {
     if (isAuthenticated && profile && !authLoading) {
-      if (profile.role === 'admin') {
-        navigate('/admin/dashboard');
-      } else {
-        navigate('/dashboard');
-      }
+      navigate(getRedirectPath(profile.role));
     }
   }, [isAuthenticated, profile, authLoading, navigate]);
 
@@ -33,28 +32,80 @@ const Login = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    const { error } = await login(email, password);
-    
-    if (error) {
-      toast({
-        title: 'Login failed',
-        description: error,
-        variant: 'destructive',
+    try {
+      // Step 1 — verify credentials
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+      if (error) {
+        toast({ title: 'Login failed', description: error.message, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      const userId = data.user.id;
+
+      // Fetch profile to get contact number for SMS
+      const userProfile   = await fetchUserProfile(userId);
+      const contactNumber = userProfile?.contactNumber || '';
+
+      // Sign out immediately — full session only after OTP
+      await supabase.auth.signOut();
+
+      // Step 2 — send OTP
+      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
+        body:    JSON.stringify({ userId, email, contactNumber }),
       });
-    } else {
-      toast({
-        title: 'Login successful',
-        description: 'Welcome back!',
+
+      const otpData = await res.json();
+
+      if (!res.ok) {
+        if (otpData.locked) {
+          // Redirect to OTP page anyway so the lock timer is visible
+          navigate('/otp-verify', {
+            state: {
+              userId,
+              email,
+              contactNumber,
+              locked:      true,
+              lockedUntil: otpData.lockedUntil,
+            },
+          });
+        } else {
+          toast({ title: 'Failed to send OTP', description: otpData.error, variant: 'destructive' });
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      toast({ title: 'OTP Sent', description: otpData.message });
+
+      // Step 3 — navigate to OTP page, pass state (no sensitive data in URL)
+      navigate('/otp-verify', {
+        state: {
+          userId,
+          email,
+          password,       // needed to complete login after OTP
+          contactNumber,
+          expiresAt: otpData.expiresAt,
+        },
       });
+
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
     }
-    
+
     setIsLoading(false);
   };
 
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/70 via-primary-light/60 to-accent/50">
-        <div className="text-white text-xl">Loading...</div>
+        <Loader2 className="w-8 h-8 text-white animate-spin" />
       </div>
     );
   }
@@ -62,10 +113,11 @@ const Login = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/70 via-primary-light/60 to-accent/50 p-4">
       <div className="w-full max-w-6xl grid lg:grid-cols-2 gap-8 items-center">
-        {/* Left side - Logo and branding */}
+
+        {/* Left — Branding */}
         <div className="hidden lg:flex flex-col items-center justify-center text-white space-y-6 p-12">
           <div className="relative">
-            <div className="absolute inset-0 bg-white/20 rounded-full blur-3xl"></div>
+            <div className="absolute inset-0 bg-white/20 rounded-full blur-3xl" />
             <img src={pcsLogo} alt="PCS Logo" className="w-64 h-64 relative z-10 drop-shadow-2xl object-contain" />
           </div>
           <div className="text-center space-y-4">
@@ -74,7 +126,7 @@ const Login = () => {
           </div>
         </div>
 
-        {/* Right side - Login form */}
+        {/* Right — Login form */}
         <Card className="w-full shadow-2xl border-2">
           <CardHeader className="space-y-4 pb-6">
             <div className="flex justify-center lg:hidden">
@@ -83,10 +135,9 @@ const Login = () => {
               </div>
             </div>
             <CardTitle className="text-3xl text-center">Welcome Back</CardTitle>
-            <p className="text-center text-muted-foreground">
-              Sign in to continue to your account
-            </p>
+            <p className="text-center text-muted-foreground">Sign in to continue to your account</p>
           </CardHeader>
+
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
@@ -128,15 +179,15 @@ const Login = () => {
                 </div>
               </div>
 
-              <Button type="submit" className="w-full h-12 text-base font-semibold" disabled={isLoading}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Signing in...
-                  </>
-                ) : 'Sign In'}
+              <Button
+                type="submit"
+                className="w-full h-12 text-base font-semibold"
+                disabled={isLoading}
+              >
+                {isLoading
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Sending OTP...</>
+                  : 'Sign In'}
               </Button>
-
             </form>
           </CardContent>
         </Card>

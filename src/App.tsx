@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
+import OtpVerification from "./pages/OtpVerification";
 
 // Student pages
 import Dashboard from "./pages/student/Dashboard";
@@ -39,7 +40,6 @@ interface RoleGuardProps {
 const RoleGuard = ({ allowedRoles, children }: RoleGuardProps) => {
   const { profile, isLoading, isAuthenticated } = useAuth();
 
-  // Show spinner while auth loads — never return null (causes blank page)
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -65,9 +65,10 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
           <Routes>
-            {/* Public */}
-            <Route path="/" element={<Login />} />
-            <Route path="/login" element={<Navigate to="/" replace />} />
+            {/* ── Public ──────────────────────────────────────────────── */}
+            <Route path="/"           element={<Login />} />
+            <Route path="/login"      element={<Navigate to="/" replace />} />
+            <Route path="/otp-verify" element={<OtpVerification />} />
 
             <Route element={<Layout />}>
 
@@ -143,15 +144,15 @@ const App = () => (
 
             </Route>
 
-            {/* Payment pages (no Layout) */}
+            {/* ── Payment pages (no Layout) ────────────────────────────── */}
             <Route path="/payment-success" element={<PaymentSuccess />} />
-            <Route path="/payment-cancel" element={<PaymentCancel />} />
+            <Route path="/payment-cancel"  element={<PaymentCancel />} />
 
-            {/* Legacy redirects */}
-            <Route path="/dashboard" element={<Navigate to="/student/dashboard" replace />} />
+            {/* ── Legacy redirects ─────────────────────────────────────── */}
+            <Route path="/dashboard"        element={<Navigate to="/student/dashboard"        replace />} />
             <Route path="/document-request" element={<Navigate to="/student/document-request" replace />} />
-            <Route path="/request-history" element={<Navigate to="/student/request-history" replace />} />
-            <Route path="/account" element={<Navigate to="/student/account" replace />} />
+            <Route path="/request-history"  element={<Navigate to="/student/request-history"  replace />} />
+            <Route path="/account"          element={<Navigate to="/student/account"          replace />} />
 
             <Route path="*" element={<NotFound />} />
           </Routes>
