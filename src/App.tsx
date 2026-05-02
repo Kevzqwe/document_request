@@ -32,6 +32,32 @@ import type { UserProfile } from "./lib/auth";
 
 const queryClient = new QueryClient();
 
+// ── Spinner shared by guards ──────────────────────────────────────────────────
+const Spinner = () => (
+  <div className="flex items-center justify-center min-h-screen">
+    <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+  </div>
+);
+
+// ── PublicGuard ───────────────────────────────────────────────────────────────
+// Only accessible when NOT authenticated (login, otp-verify).
+// If already logged in → redirect to their dashboard.
+// If auth is still loading → show spinner so we don't flash login then redirect.
+const PublicGuard = ({ children }: { children: React.ReactNode }) => {
+  const { isAuthenticated, profile, isLoading } = useAuth();
+
+  if (isLoading) return <Spinner />;
+
+  if (isAuthenticated && profile) {
+    return <Navigate to={getRedirectPath(profile.role)} replace />;
+  }
+
+  return <>{children}</>;
+};
+
+// ── RoleGuard ─────────────────────────────────────────────────────────────────
+// Only accessible when authenticated AND role matches.
+// Not authenticated → login. Wrong role → their correct dashboard.
 interface RoleGuardProps {
   allowedRoles: UserProfile['role'][];
   children: React.ReactNode;
@@ -40,13 +66,7 @@ interface RoleGuardProps {
 const RoleGuard = ({ allowedRoles, children }: RoleGuardProps) => {
   const { profile, isLoading, isAuthenticated } = useAuth();
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
+  if (isLoading) return <Spinner />;
 
   if (!isAuthenticated || !profile) return <Navigate to="/" replace />;
 
@@ -57,6 +77,7 @@ const RoleGuard = ({ allowedRoles, children }: RoleGuardProps) => {
   return <>{children}</>;
 };
 
+// ── App ───────────────────────────────────────────────────────────────────────
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -65,14 +86,20 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
           <Routes>
-            {/* ── Public ──────────────────────────────────────────────── */}
-            <Route path="/"           element={<Login />} />
-            <Route path="/login"      element={<Navigate to="/" replace />} />
-            <Route path="/otp-verify" element={<OtpVerification />} />
 
+            {/* ── Public: only visible when NOT logged in ──────────────── */}
+            <Route path="/" element={
+              <PublicGuard><Login /></PublicGuard>
+            } />
+            <Route path="/login" element={<Navigate to="/" replace />} />
+            <Route path="/otp-verify" element={
+              <PublicGuard><OtpVerification /></PublicGuard>
+            } />
+
+            {/* ── Protected: Layout wraps all dashboard routes ─────────── */}
             <Route element={<Layout />}>
 
-              {/* ── Student-only ───────────────────────────────────────── */}
+              {/* Student */}
               <Route path="/student/dashboard" element={
                 <RoleGuard allowedRoles={['student']}>
                   <Dashboard />
@@ -94,7 +121,7 @@ const App = () => (
                 </RoleGuard>
               } />
 
-              {/* ── Shared: admin + cashier + programhead ──────────────── */}
+              {/* Admin + Cashier + Program Head */}
               <Route path="/admin/dashboard" element={
                 <RoleGuard allowedRoles={['admin', 'cashier', 'programhead']}>
                   <AdminDashboard />
@@ -106,7 +133,7 @@ const App = () => (
                 </RoleGuard>
               } />
 
-              {/* ── Admin-only ─────────────────────────────────────────── */}
+              {/* Admin only */}
               <Route path="/admin/request-documents" element={
                 <RoleGuard allowedRoles={['admin']}>
                   <AdminRequestDocuments />
@@ -128,14 +155,14 @@ const App = () => (
                 </RoleGuard>
               } />
 
-              {/* ── Admin + Cashier ────────────────────────────────────── */}
+              {/* Admin + Cashier */}
               <Route path="/admin/payments" element={
                 <RoleGuard allowedRoles={['admin', 'cashier']}>
                   <AdminPayments />
                 </RoleGuard>
               } />
 
-              {/* ── Admin + Program Head ───────────────────────────────── */}
+              {/* Admin + Program Head */}
               <Route path="/admin/students" element={
                 <RoleGuard allowedRoles={['admin', 'programhead']}>
                   <AdminStudentManagement />
@@ -144,7 +171,7 @@ const App = () => (
 
             </Route>
 
-            {/* ── Payment pages (no Layout) ────────────────────────────── */}
+            {/* ── Payment pages (no auth required, no Layout) ──────────── */}
             <Route path="/payment-success" element={<PaymentSuccess />} />
             <Route path="/payment-cancel"  element={<PaymentCancel />} />
 
