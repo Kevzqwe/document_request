@@ -19,10 +19,10 @@ interface OtpLocationState {
 }
 
 const OtpVerification = () => {
-  const navigate       = useNavigate();
-  const location       = useLocation();
-  const { toast }      = useToast();
-  const { login }      = useAuth();
+  const navigate                    = useNavigate();
+  const location                    = useLocation();
+  const { toast }                   = useToast();
+  const { login, isHydrated, profile } = useAuth();
 
   const state = location.state as OtpLocationState | null;
 
@@ -53,6 +53,10 @@ const OtpVerification = () => {
     return 0;
   });
 
+  // Once login() completes we store the target role here.
+  // The useEffect below watches isHydrated + profile and navigates when ready.
+  const pendingRedirect = useRef<string | null>(null);
+
   const otpRefs        = useRef<(HTMLInputElement | null)[]>([]);
   const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
   const lockedUntilRef = useRef<Date | null>(lockedUntil);
@@ -60,6 +64,15 @@ const OtpVerification = () => {
   useEffect(() => {
     lockedUntilRef.current = lockedUntil;
   }, [lockedUntil]);
+
+  // ── Navigate only after context has fully hydrated ────────────────────────
+  useEffect(() => {
+    if (pendingRedirect.current && isHydrated && profile) {
+      const path = pendingRedirect.current;
+      pendingRedirect.current = null;
+      navigate(path, { replace: true });
+    }
+  }, [isHydrated, profile, navigate]);
 
   useEffect(() => {
     timerRef.current = setInterval(() => {
@@ -146,16 +159,19 @@ const OtpVerification = () => {
         return;
       }
 
-      // OTP passed — complete Supabase login and navigate immediately
-      const { error: loginError, profile } = await login(state!.email, state!.password);
+      // OTP passed — call login() to authenticate with Supabase + hydrate context
+      const { error: loginError, profile: returnedProfile } = await login(state!.email, state!.password);
 
-      if (loginError || !profile) {
+      if (loginError || !returnedProfile) {
         toast({ title: 'Login error', description: loginError ?? 'Could not load profile', variant: 'destructive' });
         return;
       }
 
       toast({ title: 'Login Successful', description: 'Welcome back!' });
-      navigate(getRedirectPath(profile.role), { replace: true });
+
+      // Store the redirect path — the useEffect above will fire it once
+      // isHydrated becomes true and profile is confirmed in context.
+      pendingRedirect.current = getRedirectPath(returnedProfile.role);
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });

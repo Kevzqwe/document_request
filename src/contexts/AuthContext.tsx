@@ -11,6 +11,7 @@ interface AuthContextType {
   refreshProfile: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isHydrated: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,6 +26,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser]           = useState<AuthUser | null>(null);
   const [profile, setProfile]     = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isHydrated, setIsHydrated] = useState(false);
   const navigate                  = useNavigate();
   const initialized               = useRef(false);
   const loginInProgress           = useRef(false);
@@ -33,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     setProfile(null);
     setIsLoading(false);
+    setIsHydrated(false);
     if (redirect) navigate('/', { replace: true });
   };
 
@@ -42,6 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const userProfile = await fetchUserProfile(sessionUser.id);
     setProfile(userProfile);
     setIsLoading(false);
+    setIsHydrated(true);
     return userProfile;
   };
 
@@ -66,8 +70,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (event === 'PASSWORD_RECOVERY') return;
 
-        // Skip if login() is already mid-flight — it handles hydration itself,
-        // and letting this race would break the OTP page's navigation.
         if (event === 'SIGNED_IN' && loginInProgress.current) return;
 
         if (session?.user) {
@@ -90,6 +92,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await hydrateUserFromSession(session.user);
         } else {
           setIsLoading(false);
+          setIsHydrated(true);
         }
       } catch (err) {
         console.error('Session init error:', err);
@@ -110,6 +113,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ error: string | null; profile: UserProfile | null }> => {
     try {
       loginInProgress.current = true;
+      setIsHydrated(false);
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
@@ -140,6 +144,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setUser(null);
       setProfile(null);
+      setIsHydrated(false);
       navigate('/', { replace: true });
     }
   };
@@ -163,6 +168,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       refreshProfile,
       isAuthenticated: !!user,
       isLoading,
+      isHydrated,
     }}>
       {children}
     </AuthContext.Provider>
