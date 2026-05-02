@@ -46,11 +46,10 @@ const Login = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-      // Step 2 — run profile fetch + signOut simultaneously to save ~300-500ms
-      const [userProfile] = await Promise.all([
-        fetchUserProfile(userId),
-        supabase.auth.signOut(),
-      ]);
+      // Step 2 — fetch profile first, THEN sign out
+      // (must be sequential — RLS requires an active session to query user_roles)
+      const userProfile = await fetchUserProfile(userId);
+      await supabase.auth.signOut();
 
       const contactNumber = userProfile?.contactNumber || '';
 
