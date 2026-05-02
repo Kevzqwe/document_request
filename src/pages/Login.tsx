@@ -21,10 +21,10 @@ const Login = () => {
   const navigate  = useNavigate();
   const { toast } = useToast();
 
-  // If already fully authenticated, redirect to dashboard
+  // Already authenticated — go to dashboard
   useEffect(() => {
-    if (!authLoading && isAuthenticated && profile) {
-      navigate(getRedirectPath(profile.role), { replace: true });
+    if (isAuthenticated && profile && !authLoading) {
+      navigate(getRedirectPath(profile.role));
     }
   }, [isAuthenticated, profile, authLoading, navigate]);
 
@@ -33,7 +33,7 @@ const Login = () => {
     setIsLoading(true);
 
     try {
-      // Step 1 — verify credentials with Supabase
+      // Step 1 — verify credentials
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
@@ -44,15 +44,14 @@ const Login = () => {
 
       const userId = data.user.id;
 
-      // Fetch profile to get contact number for SMS OTP
+      // Fetch profile to get contact number for SMS
       const userProfile   = await fetchUserProfile(userId);
       const contactNumber = userProfile?.contactNumber || '';
 
-      // Step 2 — flag + sign out so OTP page starts fresh (no active session yet)
-      (window as any).__otpFlowSignOut = true;
+      // Sign out immediately — full session only after OTP
       await supabase.auth.signOut();
 
-      // Step 3 — send OTP via edge function
+      // Step 2 — send OTP
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -66,9 +65,15 @@ const Login = () => {
 
       if (!res.ok) {
         if (otpData.locked) {
-          // Still go to OTP page so lock timer is visible
+          // Redirect to OTP page anyway so the lock timer is visible
           navigate('/otp-verify', {
-            state: { userId, email, contactNumber, locked: true, lockedUntil: otpData.lockedUntil },
+            state: {
+              userId,
+              email,
+              contactNumber,
+              locked:      true,
+              lockedUntil: otpData.lockedUntil,
+            },
           });
         } else {
           toast({ title: 'Failed to send OTP', description: otpData.error, variant: 'destructive' });
@@ -79,12 +84,12 @@ const Login = () => {
 
       toast({ title: 'OTP Sent', description: otpData.message });
 
-      // Step 4 — go to OTP page with all state needed to complete login
+      // Step 3 — navigate to OTP page, pass state (no sensitive data in URL)
       navigate('/otp-verify', {
         state: {
           userId,
           email,
-          password,       // needed to re-authenticate after OTP passes
+          password,       // needed to complete login after OTP
           contactNumber,
           expiresAt: otpData.expiresAt,
         },
