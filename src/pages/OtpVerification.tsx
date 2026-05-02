@@ -6,8 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { ShieldCheck, Loader2, RefreshCw, ArrowLeft } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
-import { supabase } from '@/integrations/supabase/client';
-import { getRedirectPath } from '@/lib/auth';
+import { fetchUserProfile, getRedirectPath } from '@/lib/auth';
 
 interface OtpLocationState {
   userId:        string;
@@ -39,48 +38,58 @@ const OtpVerification = () => {
     if (profile) navigate(getRedirectPath(profile.role), { replace: true });
   }, [profile, navigate]);
 
-  const [otp, setOtp]                     = useState(['', '', '', '', '', '']);
-  const [isVerifying, setIsVerifying]     = useState(false);
-  const [isResending, setIsResending]     = useState(false);
-  const [otpCountdown, setOtpCountdown]   = useState(300);
+  const [otp, setOtp]                       = useState(['', '', '', '', '', '']);
+  const [isVerifying, setIsVerifying]       = useState(false);
+  const [isResending, setIsResending]       = useState(false);
+  const [otpCountdown, setOtpCountdown]     = useState(() => {
+    if (state?.expiresAt) {
+      return Math.max(0, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000));
+    }
+    return 300;
+  });
   const [resendCooldown, setResendCooldown] = useState(60);
-  const [attemptsLeft, setAttemptsLeft]   = useState(5);
-  const [lockedUntil, setLockedUntil]     = useState<Date | null>(
+  const [attemptsLeft, setAttemptsLeft]     = useState(5);
+  const [lockedUntil, setLockedUntil]       = useState<Date | null>(
     state?.lockedUntil ? new Date(state.lockedUntil) : null
   );
-  const [lockCountdown, setLockCountdown] = useState(0);
-
-  const otpRefs    = useRef<(HTMLInputElement | null)[]>([]);
-  const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ── Countdown timers ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (state?.expiresAt) {
-      const remaining = Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000);
-      setOtpCountdown(Math.max(0, remaining));
-    }
-
+  const [lockCountdown, setLockCountdown]   = useState(() => {
     if (state?.locked && state?.lockedUntil) {
-      const remaining = Math.ceil((new Date(state.lockedUntil).getTime() - Date.now()) / 1000);
-      setLockCountdown(Math.max(0, remaining));
+      return Math.max(0, Math.ceil((new Date(state.lockedUntil).getTime() - Date.now()) / 1000));
     }
+    return 0;
+  });
 
+  const otpRefs        = useRef<(HTMLInputElement | null)[]>([]);
+  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lockedUntilRef = useRef<Date | null>(lockedUntil);
+
+  // Keep ref in sync with state so interval never has a stale closure
+  useEffect(() => {
+    lockedUntilRef.current = lockedUntil;
+  }, [lockedUntil]);
+
+  // ── Single interval, runs once on mount ───────────────────────────────────
+  useEffect(() => {
     timerRef.current = setInterval(() => {
       setOtpCountdown(prev => Math.max(0, prev - 1));
       setResendCooldown(prev => Math.max(0, prev - 1));
 
-      if (lockedUntil) {
-        const rem = Math.ceil((lockedUntil.getTime() - Date.now()) / 1000);
+      const lu = lockedUntilRef.current;
+      if (lu) {
+        const rem = Math.ceil((lu.getTime() - Date.now()) / 1000);
         setLockCountdown(Math.max(0, rem));
-        if (rem <= 0) setLockedUntil(null);
+        if (rem <= 0) {
+          setLockedUntil(null);
+          lockedUntilRef.current = null;
+        }
       }
     }, 1000);
 
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [lockedUntil]);
+  }, []); // empty deps — starts once, never restarts
 
   const formatTime = (s: number) => {
-    const m = Math.floor(s / 60).toString().padStart(2, '0');
+    const m   = Math.floor(s / 60).toString().padStart(2, '0');
     const sec = (s % 60).toString().padStart(2, '0');
     return `${m}:${sec}`;
   };
@@ -124,6 +133,7 @@ const OtpVerification = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+      // ── Step 1: Verify OTP code against backend ───────────────────────
       const res = await fetch(`${supabaseUrl}/functions/v1/verify-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
@@ -134,8 +144,10 @@ const OtpVerification = () => {
 
       if (!res.ok) {
         if (data.locked) {
-          setLockedUntil(new Date(data.lockedUntil));
-          setLockCountdown(Math.ceil((new Date(data.lockedUntil).getTime() - Date.now()) / 1000));
+          const lu = new Date(data.lockedUntil);
+          setLockedUntil(lu);
+          lockedUntilRef.current = lu;
+          setLockCountdown(Math.ceil((lu.getTime() - Date.now()) / 1000));
         } else if (data.remaining !== undefined) {
           setAttemptsLeft(data.remaining);
           setOtp(['', '', '', '', '', '']);
@@ -146,7 +158,7 @@ const OtpVerification = () => {
         return;
       }
 
-      // ── OTP correct — complete the login ──────────────────────────────
+      // ── Step 2: OTP correct — sign in via Supabase ────────────────────
       const { error: loginError } = await login(state!.email, state!.password);
       if (loginError) {
         toast({ title: 'Login error', description: loginError, variant: 'destructive' });
@@ -154,8 +166,14 @@ const OtpVerification = () => {
         return;
       }
 
+      // ── Step 3: Navigate IMMEDIATELY — do not wait for AuthContext ────
+      // fetchUserProfile is already cached from login, so this is instant.
+      // Bypasses the onAuthStateChange + setTimeout(0) delay in AuthContext.
+      const userProfile  = await fetchUserProfile(state!.userId);
+      const redirectPath = getRedirectPath(userProfile?.role ?? 'student');
+
       toast({ title: 'Login Successful', description: 'Welcome back!' });
-      // Navigation handled by AuthContext via getRedirectPath
+      navigate(redirectPath, { replace: true });
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -165,7 +183,7 @@ const OtpVerification = () => {
 
   // ── Resend OTP ────────────────────────────────────────────────────────────
   const handleResend = async () => {
-    if (isResending || lockedUntil || resendCooldown > 0) return;
+    if (isResending || lockedUntilRef.current || resendCooldown > 0) return;
     setIsResending(true);
 
     try {
@@ -186,8 +204,10 @@ const OtpVerification = () => {
 
       if (!res.ok) {
         if (data.locked) {
-          setLockedUntil(new Date(data.lockedUntil));
-          setLockCountdown(Math.ceil((new Date(data.lockedUntil).getTime() - Date.now()) / 1000));
+          const lu = new Date(data.lockedUntil);
+          setLockedUntil(lu);
+          lockedUntilRef.current = lu;
+          setLockCountdown(Math.ceil((lu.getTime() - Date.now()) / 1000));
         }
         toast({ title: 'Failed to resend', description: data.error, variant: 'destructive' });
       } else {
@@ -207,10 +227,10 @@ const OtpVerification = () => {
 
   if (!state?.userId) return null;
 
-  const isLocked   = !!lockedUntil && lockCountdown > 0;
-  const isExpired  = otpCountdown === 0;
-  const canSubmit  = otp.join('').length === 6 && !isLocked && !isExpired && !isVerifying;
-  const canResend  = !isResending && !isLocked && resendCooldown === 0;
+  const isLocked  = !!lockedUntilRef.current && lockCountdown > 0;
+  const isExpired = otpCountdown === 0;
+  const canSubmit = otp.join('').length === 6 && !isLocked && !isExpired && !isVerifying;
+  const canResend = !isResending && !isLocked && resendCooldown === 0;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/70 via-primary-light/60 to-accent/50 p-4">

@@ -48,6 +48,10 @@ const Login = () => {
       const userProfile   = await fetchUserProfile(userId);
       const contactNumber = userProfile?.contactNumber || '';
 
+      // ✅ Signal to AuthContext that this signOut is intentional (OTP mid-flow)
+      //    so it does NOT trigger a redirect back to login
+      (window as any).__otpFlowSignOut = true;
+
       // Sign out immediately — full session only after OTP
       await supabase.auth.signOut();
 

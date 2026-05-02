@@ -24,11 +24,12 @@ export const useAuth = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser]       = useState<AuthUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const navigate = useNavigate();
-  const initialized = useRef(false); // ✅ guard against double fetch on mount
+  const navigate      = useNavigate();
+  const initialized   = useRef(false);  // ✅ guard against double fetch on mount
+  const signingOutRef = useRef(false);  // ✅ guard against mid-login signOut triggering redirect
 
   // ✅ Helper: clear all auth state and redirect to login
   const clearAuthState = async (redirect = true) => {
@@ -41,7 +42,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ✅ Helper: set user + fetch profile from a session user object
   const hydrateUserFromSession = async (sessionUser: { id: string; email?: string | null }) => {
     const authUser: AuthUser = {
-      id: sessionUser.id,
+      id:    sessionUser.id,
       email: sessionUser.email || '',
     };
     setUser(authUser);
@@ -60,11 +61,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Skip duplicate handling before getSession() initializes
         if (!initialized.current) return;
 
-        // ✅ Handle token expiry / sign out events
-        if (
-          event === 'SIGNED_OUT' ||
-          (event === 'TOKEN_REFRESHED' && !session)
-        ) {
+        // ✅ Ignore SIGNED_OUT fired by the mid-login signOut in Login.tsx (OTP flow)
+        if (event === 'SIGNED_OUT') {
+          if ((window as any).__otpFlowSignOut) {
+            // This is the intentional OTP-flow sign-out — do NOT redirect
+            (window as any).__otpFlowSignOut = false;
+            return;
+          }
+          // Real sign-out (logout button, token expiry, etc.)
+          await clearAuthState();
+          return;
+        }
+
+        // ✅ Handle token expiry with no session
+        if (event === 'TOKEN_REFRESHED' && !session) {
           await clearAuthState();
           return;
         }
@@ -75,10 +85,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         if (session?.user) {
-          // Use setTimeout to avoid Supabase internal deadlock
-          setTimeout(async () => {
-            await hydrateUserFromSession(session.user);
-          }, 0);
+          await hydrateUserFromSession(session.user);
         } else {
           await clearAuthState();
         }
@@ -93,8 +100,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (error) {
           console.error('Session retrieval error:', error.message);
           // ✅ Clear any stale/corrupted tokens
+          signingOutRef.current = true;
           await supabase.auth.signOut();
-          await clearAuthState();
+          await clearAuthState(false); // don't redirect — user is already on login
           return;
         }
 
@@ -105,8 +113,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } catch (err) {
         console.error('Unexpected error during session init:', err);
+        signingOutRef.current = true;
         await supabase.auth.signOut();
-        await clearAuthState();
+        await clearAuthState(false);
       } finally {
         initialized.current = true; // ✅ Allow onAuthStateChange to process future events
       }
@@ -154,6 +163,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
+      // ✅ Mark as intentional full logout (not OTP mid-flow)
+      signingOutRef.current = false;
       await supabase.auth.signOut();
     } catch (err) {
       console.error('Logout error:', err);
@@ -164,6 +175,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       navigate('/');
     }
   };
+
+  // ✅ Expose signingOutRef setter so Login.tsx can flag the OTP mid-flow signOut
+  // This is consumed internally — no need to expose via context
 
   return (
     <AuthContext.Provider
