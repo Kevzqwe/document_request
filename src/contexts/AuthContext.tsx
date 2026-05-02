@@ -17,133 +17,140 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [user, setUser]           = useState<AuthUser | null>(null);
+  const [profile, setProfile]     = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const navigate = useNavigate();
-  const initialized = useRef(false); // ✅ guard against double fetch on mount
+  const navigate                  = useNavigate();
+  const initialized               = useRef(false);
 
-  // ✅ Helper: clear all auth state and redirect to login
-  const clearAuthState = async (redirect = true) => {
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  const clearAuthState = (redirect = true) => {
     setUser(null);
     setProfile(null);
     setIsLoading(false);
-    if (redirect) navigate('/');
+    if (redirect) navigate('/', { replace: true });
   };
 
-  // ✅ Helper: set user + fetch profile from a session user object
   const hydrateUserFromSession = async (sessionUser: { id: string; email?: string | null }) => {
-    const authUser: AuthUser = {
-      id: sessionUser.id,
-      email: sessionUser.email || '',
-    };
+    const authUser: AuthUser = { id: sessionUser.id, email: sessionUser.email || '' };
     setUser(authUser);
-
     const userProfile = await fetchUserProfile(sessionUser.id);
     setProfile(userProfile);
     setIsLoading(false);
-
     return userProfile;
   };
 
+  // ── Auth state listener + session init ────────────────────────────────────
+
   useEffect(() => {
-    // ✅ Step 1: Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        // Skip duplicate handling before getSession() initializes
+        // Wait until initSession() has run first
         if (!initialized.current) return;
 
-        // ✅ Handle token expiry / sign out events
-        if (
-          event === 'SIGNED_OUT' ||
-          (event === 'TOKEN_REFRESHED' && !session)
-        ) {
-          await clearAuthState();
+        if (event === 'SIGNED_OUT') {
+          clearAuthState(true);
           return;
         }
 
-        // ✅ Handle password recovery or user updates
-        if (event === 'PASSWORD_RECOVERY') {
+        if (event === 'TOKEN_REFRESHED' && !session) {
+          clearAuthState(true);
           return;
         }
 
+        if (event === 'PASSWORD_RECOVERY') return;
+
+        // Use setTimeout to avoid Supabase internal deadlock on SIGNED_IN.
+        // login() also calls hydrateUserFromSession directly, so this path
+        // only matters for token refresh / external sign-ins.
         if (session?.user) {
-          // Use setTimeout to avoid Supabase internal deadlock
           setTimeout(async () => {
             await hydrateUserFromSession(session.user);
           }, 0);
         } else {
-          await clearAuthState();
+          clearAuthState(true);
         }
       }
     );
 
-    // ✅ Step 2: Check existing session on mount
     const initSession = async () => {
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
-
         if (error) {
-          console.error('Session retrieval error:', error.message);
-          // ✅ Clear any stale/corrupted tokens
           await supabase.auth.signOut();
-          await clearAuthState();
+          clearAuthState(false);
           return;
         }
-
         if (session?.user) {
           await hydrateUserFromSession(session.user);
         } else {
           setIsLoading(false);
         }
       } catch (err) {
-        console.error('Unexpected error during session init:', err);
+        console.error('Session init error:', err);
         await supabase.auth.signOut();
-        await clearAuthState();
+        clearAuthState(false);
       } finally {
-        initialized.current = true; // ✅ Allow onAuthStateChange to process future events
+        initialized.current = true;
       }
     };
 
     initSession();
-
     return () => subscription.unsubscribe();
   }, []);
 
-  const login = async (email: string, password: string): Promise<{ error: string | null }> => {
+  // ── login() — called from OtpVerification after OTP passes ───────────────
+  // Signs in with Supabase, hydrates context (sets user + profile),
+  // then navigates. The profile useEffect in OtpVerification detects the
+  // profile change and also navigates — whichever fires first is fine since
+  // both go to the same path.
+
+  const login = async (
+    email: string,
+    password: string
+  ): Promise<{ error: string | null }> => {
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
-      if (error) {
-        return { error: error.message };
-      }
+      if (error) return { error: error.message };
 
       if (data.user) {
         const userProfile = await hydrateUserFromSession(data.user);
-
         if (userProfile) {
-          const redirectPath = getRedirectPath(userProfile.role);
-          navigate(redirectPath);
+          navigate(getRedirectPath(userProfile.role), { replace: true });
         }
       }
 
       return { error: null };
-    } catch (err) {
+    } catch (err: any) {
       console.error('Login error:', err);
       return { error: 'An unexpected error occurred. Please try again.' };
     }
   };
 
+  // ── logout ────────────────────────────────────────────────────────────────
+
+  const logout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setUser(null);
+      setProfile(null);
+      navigate('/', { replace: true });
+    }
+  };
+
+  // ── refreshProfile ────────────────────────────────────────────────────────
+
   const refreshProfile = async () => {
     if (!user) return;
-
     try {
       const userProfile = await fetchUserProfile(user.id);
       setProfile(userProfile);
@@ -152,31 +159,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const logout = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.error('Logout error:', err);
-    } finally {
-      // ✅ Always clear state even if signOut fails
-      setUser(null);
-      setProfile(null);
-      navigate('/');
-    }
-  };
-
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        profile,
-        login,
-        logout,
-        refreshProfile,
-        isAuthenticated: !!user,
-        isLoading,
-      }}
-    >
+    <AuthContext.Provider value={{
+      user,
+      profile,
+      login,
+      logout,
+      refreshProfile,
+      isAuthenticated: !!user,
+      isLoading,
+    }}>
       {children}
     </AuthContext.Provider>
   );

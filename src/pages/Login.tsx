@@ -42,19 +42,19 @@ const Login = () => {
         return;
       }
 
-      const userId = data.user.id;
-
-      // Fetch profile to get contact number for SMS
-      const userProfile   = await fetchUserProfile(userId);
-      const contactNumber = userProfile?.contactNumber || '';
-
-      // Sign out immediately — full session only after OTP
-      await supabase.auth.signOut();
-
-      // Step 2 — send OTP
+      const userId          = data.user.id;
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+      // Step 2 — run profile fetch + signOut simultaneously to save ~300-500ms
+      const [userProfile] = await Promise.all([
+        fetchUserProfile(userId),
+        supabase.auth.signOut(),
+      ]);
+
+      const contactNumber = userProfile?.contactNumber || '';
+
+      // Step 3 — send OTP (now has contactNumber for SMS)
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
@@ -65,11 +65,11 @@ const Login = () => {
 
       if (!res.ok) {
         if (otpData.locked) {
-          // Redirect to OTP page anyway so the lock timer is visible
           navigate('/otp-verify', {
             state: {
               userId,
               email,
+              password,
               contactNumber,
               locked:      true,
               lockedUntil: otpData.lockedUntil,
@@ -77,19 +77,19 @@ const Login = () => {
           });
         } else {
           toast({ title: 'Failed to send OTP', description: otpData.error, variant: 'destructive' });
+          setIsLoading(false);
         }
-        setIsLoading(false);
         return;
       }
 
       toast({ title: 'OTP Sent', description: otpData.message });
 
-      // Step 3 — navigate to OTP page, pass state (no sensitive data in URL)
+      // Step 4 — navigate to OTP page
       navigate('/otp-verify', {
         state: {
           userId,
           email,
-          password,       // needed to complete login after OTP
+          password,
           contactNumber,
           expiresAt: otpData.expiresAt,
         },
@@ -97,9 +97,8 @@ const Login = () => {
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   if (authLoading) {

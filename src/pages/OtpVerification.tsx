@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { ShieldCheck, Loader2, RefreshCw, ArrowLeft } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
-import { supabase } from '@/integrations/supabase/client';
 import { getRedirectPath } from '@/lib/auth';
 
 interface OtpLocationState {
@@ -34,53 +33,64 @@ const OtpVerification = () => {
     }
   }, [state, navigate]);
 
-  // Redirect if already logged in
+  // Navigate to dashboard once profile is set in context after login()
   useEffect(() => {
-    if (profile) navigate(getRedirectPath(profile.role), { replace: true });
+    if (profile) {
+      navigate(getRedirectPath(profile.role), { replace: true });
+    }
   }, [profile, navigate]);
 
-  const [otp, setOtp]                     = useState(['', '', '', '', '', '']);
-  const [isVerifying, setIsVerifying]     = useState(false);
-  const [isResending, setIsResending]     = useState(false);
-  const [otpCountdown, setOtpCountdown]   = useState(300);
+  const [otp, setOtp]                       = useState(['', '', '', '', '', '']);
+  const [isVerifying, setIsVerifying]       = useState(false);
+  const [isResending, setIsResending]       = useState(false);
+  const [otpCountdown, setOtpCountdown]     = useState(() =>
+    state?.expiresAt
+      ? Math.max(0, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000))
+      : 300
+  );
   const [resendCooldown, setResendCooldown] = useState(60);
-  const [attemptsLeft, setAttemptsLeft]   = useState(5);
-  const [lockedUntil, setLockedUntil]     = useState<Date | null>(
+  const [attemptsLeft, setAttemptsLeft]     = useState(5);
+  const [lockedUntil, setLockedUntil]       = useState<Date | null>(
     state?.lockedUntil ? new Date(state.lockedUntil) : null
   );
-  const [lockCountdown, setLockCountdown] = useState(0);
+  const [lockCountdown, setLockCountdown]   = useState(() =>
+    state?.locked && state?.lockedUntil
+      ? Math.max(0, Math.ceil((new Date(state.lockedUntil).getTime() - Date.now()) / 1000))
+      : 0
+  );
 
-  const otpRefs    = useRef<(HTMLInputElement | null)[]>([]);
-  const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const otpRefs        = useRef<(HTMLInputElement | null)[]>([]);
+  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Store lockedUntil in a ref so the single interval can always read latest value
+  // without needing to be recreated when lockedUntil state changes
+  const lockedUntilRef = useRef<Date | null>(lockedUntil);
 
-  // ── Countdown timers ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (state?.expiresAt) {
-      const remaining = Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000);
-      setOtpCountdown(Math.max(0, remaining));
-    }
+    lockedUntilRef.current = lockedUntil;
+  }, [lockedUntil]);
 
-    if (state?.locked && state?.lockedUntil) {
-      const remaining = Math.ceil((new Date(state.lockedUntil).getTime() - Date.now()) / 1000);
-      setLockCountdown(Math.max(0, remaining));
-    }
-
+  // Single stable interval — never restarts, reads lockedUntil via ref
+  useEffect(() => {
     timerRef.current = setInterval(() => {
-      setOtpCountdown(prev => Math.max(0, prev - 1));
+      setOtpCountdown(prev  => Math.max(0, prev - 1));
       setResendCooldown(prev => Math.max(0, prev - 1));
 
-      if (lockedUntil) {
-        const rem = Math.ceil((lockedUntil.getTime() - Date.now()) / 1000);
+      const lu = lockedUntilRef.current;
+      if (lu) {
+        const rem = Math.ceil((lu.getTime() - Date.now()) / 1000);
         setLockCountdown(Math.max(0, rem));
-        if (rem <= 0) setLockedUntil(null);
+        if (rem <= 0) {
+          setLockedUntil(null);
+          lockedUntilRef.current = null;
+        }
       }
     }, 1000);
 
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [lockedUntil]);
+  }, []); // empty deps — interval created once, never restarted
 
   const formatTime = (s: number) => {
-    const m = Math.floor(s / 60).toString().padStart(2, '0');
+    const m   = Math.floor(s / 60).toString().padStart(2, '0');
     const sec = (s % 60).toString().padStart(2, '0');
     return `${m}:${sec}`;
   };
@@ -134,8 +144,10 @@ const OtpVerification = () => {
 
       if (!res.ok) {
         if (data.locked) {
-          setLockedUntil(new Date(data.lockedUntil));
-          setLockCountdown(Math.ceil((new Date(data.lockedUntil).getTime() - Date.now()) / 1000));
+          const lu = new Date(data.lockedUntil);
+          setLockedUntil(lu);
+          lockedUntilRef.current = lu;
+          setLockCountdown(Math.ceil((lu.getTime() - Date.now()) / 1000));
         } else if (data.remaining !== undefined) {
           setAttemptsLeft(data.remaining);
           setOtp(['', '', '', '', '', '']);
@@ -146,16 +158,13 @@ const OtpVerification = () => {
         return;
       }
 
-      // ── OTP correct — complete the login ──────────────────────────────
+      // OTP correct — login() sets profile in context → useEffect above navigates
       const { error: loginError } = await login(state!.email, state!.password);
       if (loginError) {
         toast({ title: 'Login error', description: loginError, variant: 'destructive' });
         setIsVerifying(false);
-        return;
       }
-
-      toast({ title: 'Login Successful', description: 'Welcome back!' });
-      // Navigation handled by AuthContext via getRedirectPath
+      // Don't setIsVerifying(false) on success — keep spinner while navigating
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -165,7 +174,7 @@ const OtpVerification = () => {
 
   // ── Resend OTP ────────────────────────────────────────────────────────────
   const handleResend = async () => {
-    if (isResending || lockedUntil || resendCooldown > 0) return;
+    if (isResending || lockedUntilRef.current || resendCooldown > 0) return;
     setIsResending(true);
 
     try {
@@ -186,8 +195,10 @@ const OtpVerification = () => {
 
       if (!res.ok) {
         if (data.locked) {
-          setLockedUntil(new Date(data.lockedUntil));
-          setLockCountdown(Math.ceil((new Date(data.lockedUntil).getTime() - Date.now()) / 1000));
+          const lu = new Date(data.lockedUntil);
+          setLockedUntil(lu);
+          lockedUntilRef.current = lu;
+          setLockCountdown(Math.ceil((lu.getTime() - Date.now()) / 1000));
         }
         toast({ title: 'Failed to resend', description: data.error, variant: 'destructive' });
       } else {
@@ -200,17 +211,17 @@ const OtpVerification = () => {
       }
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsResending(false);
     }
-
-    setIsResending(false);
   };
 
   if (!state?.userId) return null;
 
-  const isLocked   = !!lockedUntil && lockCountdown > 0;
-  const isExpired  = otpCountdown === 0;
-  const canSubmit  = otp.join('').length === 6 && !isLocked && !isExpired && !isVerifying;
-  const canResend  = !isResending && !isLocked && resendCooldown === 0;
+  const isLocked  = !!lockedUntilRef.current && lockCountdown > 0;
+  const isExpired = otpCountdown === 0;
+  const canSubmit = otp.join('').length === 6 && !isLocked && !isExpired && !isVerifying;
+  const canResend = !isResending && !isLocked && resendCooldown === 0;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/70 via-primary-light/60 to-accent/50 p-4">
@@ -237,7 +248,6 @@ const OtpVerification = () => {
               </div>
             </div>
 
-            {/* Shield icon */}
             <div className="flex justify-center">
               <div className={`w-20 h-20 rounded-full flex items-center justify-center ${
                 isLocked ? 'bg-destructive/10' : 'bg-primary/10'
@@ -253,7 +263,8 @@ const OtpVerification = () => {
               {isLocked
                 ? 'Too many failed attempts. Please wait before trying again.'
                 : <>
-                    A 6-digit OTP was sent to <span className="font-semibold text-foreground">{state.email}</span>
+                    A 6-digit OTP was sent to{' '}
+                    <span className="font-semibold text-foreground">{state.email}</span>
                     {state.contactNumber && (
                       <> and <span className="font-semibold text-foreground">••••{state.contactNumber.slice(-4)}</span></>
                     )}
@@ -265,7 +276,6 @@ const OtpVerification = () => {
           <CardContent className="pt-4">
             <form onSubmit={handleVerify} className="space-y-6">
 
-              {/* Lock countdown banner */}
               {isLocked && (
                 <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-xl text-center space-y-1">
                   <p className="text-destructive font-semibold">🔒 Account Locked</p>
@@ -276,7 +286,6 @@ const OtpVerification = () => {
                 </div>
               )}
 
-              {/* OTP expiry */}
               {!isLocked && (
                 <div className={`text-center text-sm font-medium ${
                   otpCountdown < 60 ? 'text-destructive' : 'text-muted-foreground'
@@ -288,7 +297,6 @@ const OtpVerification = () => {
                 </div>
               )}
 
-              {/* 6-digit OTP boxes */}
               <div className="flex justify-center gap-3">
                 {otp.map((digit, index) => (
                   <input
@@ -312,7 +320,6 @@ const OtpVerification = () => {
                 ))}
               </div>
 
-              {/* Attempts warning */}
               {attemptsLeft < 5 && !isLocked && (
                 <div className="text-center p-2 bg-amber-50 border border-amber-200 rounded-lg">
                   <p className="text-amber-700 text-sm font-medium">
@@ -321,7 +328,6 @@ const OtpVerification = () => {
                 </div>
               )}
 
-              {/* Verify button */}
               <Button
                 type="submit"
                 className="w-full h-12 text-base font-semibold"
@@ -332,7 +338,6 @@ const OtpVerification = () => {
                   : 'Verify & Login'}
               </Button>
 
-              {/* Footer actions */}
               <div className="flex items-center justify-between text-sm pt-1">
                 <button
                   type="button"
@@ -353,10 +358,7 @@ const OtpVerification = () => {
                     ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     : <RefreshCw className="w-3.5 h-3.5" />
                   }
-                  {resendCooldown > 0
-                    ? `Resend in ${resendCooldown}s`
-                    : 'Resend OTP'
-                  }
+                  {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend OTP'}
                 </button>
               </div>
             </form>
