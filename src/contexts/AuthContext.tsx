@@ -27,8 +27,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
   const navigate                  = useNavigate();
   const initialized               = useRef(false);
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  const loginInProgress           = useRef(false);
 
   const clearAuthState = (redirect = true) => {
     setUser(null);
@@ -46,16 +45,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return userProfile;
   };
 
-  // ── Auth state listener + session init ────────────────────────────────────
-
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        // Wait until initSession() has run first
         if (!initialized.current) return;
 
         if (event === 'SIGNED_OUT') {
-          // Ignore the intentional mid-login OTP sign-out from Login.tsx
           if ((window as any).__otpFlowSignOut) {
             (window as any).__otpFlowSignOut = false;
             return;
@@ -71,8 +66,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (event === 'PASSWORD_RECOVERY') return;
 
-        // SIGNED_IN fires after login() — just hydrate state, do NOT navigate.
-        // Navigation is handled by the calling page (Login.tsx or OtpVerification.tsx).
+        // Skip if login() is already mid-flight — it handles hydration itself,
+        // and letting this race would break the OTP page's navigation.
+        if (event === 'SIGNED_IN' && loginInProgress.current) return;
+
         if (session?.user) {
           await hydrateUserFromSession(session.user);
         } else {
@@ -107,30 +104,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => subscription.unsubscribe();
   }, []);
 
-  // ── login() — signs in and returns profile, does NOT navigate ─────────────
-  // The calling page decides where to go after login() resolves.
-
   const login = async (
     email: string,
     password: string
   ): Promise<{ error: string | null; profile: UserProfile | null }> => {
     try {
+      loginInProgress.current = true;
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) return { error: error.message, profile: null };
+
+      if (error) {
+        loginInProgress.current = false;
+        return { error: error.message, profile: null };
+      }
 
       if (data.user) {
         const userProfile = await hydrateUserFromSession(data.user);
+        loginInProgress.current = false;
         return { error: null, profile: userProfile };
       }
 
+      loginInProgress.current = false;
       return { error: 'No user returned', profile: null };
     } catch (err: any) {
       console.error('Login error:', err);
+      loginInProgress.current = false;
       return { error: 'An unexpected error occurred. Please try again.', profile: null };
     }
   };
-
-  // ── logout ────────────────────────────────────────────────────────────────
 
   const logout = async () => {
     try {
@@ -143,8 +143,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       navigate('/', { replace: true });
     }
   };
-
-  // ── refreshProfile ────────────────────────────────────────────────────────
 
   const refreshProfile = async () => {
     if (!user) return;

@@ -22,11 +22,10 @@ const OtpVerification = () => {
   const navigate       = useNavigate();
   const location       = useLocation();
   const { toast }      = useToast();
-  const { login }      = useAuth(); // ← only use login(), not profile
+  const { login }      = useAuth();
 
   const state = location.state as OtpLocationState | null;
 
-  // Redirect to login if arrived here directly without state
   useEffect(() => {
     if (!state?.userId || !state?.email) {
       navigate('/', { replace: true });
@@ -62,7 +61,6 @@ const OtpVerification = () => {
     lockedUntilRef.current = lockedUntil;
   }, [lockedUntil]);
 
-  // ── Single interval on mount ──────────────────────────────────────────────
   useEffect(() => {
     timerRef.current = setInterval(() => {
       setOtpCountdown(prev  => Math.max(0, prev - 1));
@@ -88,7 +86,6 @@ const OtpVerification = () => {
     return `${m}:${sec}`;
   };
 
-  // ── OTP input handlers ────────────────────────────────────────────────────
   const handleOtpChange = (index: number, value: string) => {
     if (!/^\d*$/.test(value)) return;
     const next = [...otp];
@@ -112,7 +109,6 @@ const OtpVerification = () => {
     otpRefs.current[Math.min(pasted.length, 5)]?.focus();
   };
 
-  // ── Verify OTP ────────────────────────────────────────────────────────────
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     const otpCode = otp.join('');
@@ -127,7 +123,6 @@ const OtpVerification = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-      // Step 1 — verify OTP with backend
       const res = await fetch(`${supabaseUrl}/functions/v1/verify-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
@@ -148,31 +143,27 @@ const OtpVerification = () => {
           otpRefs.current[0]?.focus();
         }
         toast({ title: 'Verification Failed', description: data.error, variant: 'destructive' });
-        setIsVerifying(false);
         return;
       }
 
-      // Step 2 — OTP passed, complete the Supabase login
-      // login() returns the profile directly — no waiting for AuthContext state
+      // OTP passed — complete Supabase login and navigate immediately
       const { error: loginError, profile } = await login(state!.email, state!.password);
 
       if (loginError || !profile) {
         toast({ title: 'Login error', description: loginError ?? 'Could not load profile', variant: 'destructive' });
-        setIsVerifying(false);
         return;
       }
 
-      // Step 3 — navigate immediately using the profile returned by login()
       toast({ title: 'Login Successful', description: 'Welcome back!' });
       navigate(getRedirectPath(profile.role), { replace: true });
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
       setIsVerifying(false);
     }
   };
 
-  // ── Resend OTP ────────────────────────────────────────────────────────────
   const handleResend = async () => {
     if (isResending || lockedUntilRef.current || resendCooldown > 0) return;
     setIsResending(true);
@@ -211,9 +202,9 @@ const OtpVerification = () => {
       }
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsResending(false);
     }
-
-    setIsResending(false);
   };
 
   if (!state?.userId) return null;
@@ -227,7 +218,6 @@ const OtpVerification = () => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/70 via-primary-light/60 to-accent/50 p-4">
       <div className="w-full max-w-6xl grid lg:grid-cols-2 gap-8 items-center">
 
-        {/* Left — Branding */}
         <div className="hidden lg:flex flex-col items-center justify-center text-white space-y-6 p-12">
           <div className="relative">
             <div className="absolute inset-0 bg-white/20 rounded-full blur-3xl" />
@@ -239,7 +229,6 @@ const OtpVerification = () => {
           </div>
         </div>
 
-        {/* Right — OTP form */}
         <Card className="w-full shadow-2xl border-2">
           <CardHeader className="space-y-4 pb-2">
             <div className="flex justify-center lg:hidden mb-2">
@@ -276,7 +265,6 @@ const OtpVerification = () => {
           <CardContent className="pt-4">
             <form onSubmit={handleVerify} className="space-y-6">
 
-              {/* Lock countdown banner */}
               {isLocked && (
                 <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-xl text-center space-y-1">
                   <p className="text-destructive font-semibold">🔒 Account Locked</p>
@@ -287,7 +275,6 @@ const OtpVerification = () => {
                 </div>
               )}
 
-              {/* OTP expiry */}
               {!isLocked && (
                 <div className={`text-center text-sm font-medium ${
                   otpCountdown < 60 ? 'text-destructive' : 'text-muted-foreground'
@@ -299,7 +286,6 @@ const OtpVerification = () => {
                 </div>
               )}
 
-              {/* 6-digit OTP boxes */}
               <div className="flex justify-center gap-3">
                 {otp.map((digit, index) => (
                   <input
@@ -323,7 +309,6 @@ const OtpVerification = () => {
                 ))}
               </div>
 
-              {/* Attempts warning */}
               {attemptsLeft < 5 && !isLocked && (
                 <div className="text-center p-2 bg-amber-50 border border-amber-200 rounded-lg">
                   <p className="text-amber-700 text-sm font-medium">
@@ -332,7 +317,6 @@ const OtpVerification = () => {
                 </div>
               )}
 
-              {/* Verify button */}
               <Button
                 type="submit"
                 className="w-full h-12 text-base font-semibold"
@@ -343,7 +327,6 @@ const OtpVerification = () => {
                   : 'Verify & Login'}
               </Button>
 
-              {/* Footer actions */}
               <div className="flex items-center justify-between text-sm pt-1">
                 <button
                   type="button"
