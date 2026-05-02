@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { ShieldCheck, Loader2, RefreshCw, ArrowLeft } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
-import { fetchUserProfile, getRedirectPath } from '@/lib/auth';
+import { getRedirectPath } from '@/lib/auth';
 
 interface OtpLocationState {
   userId:        string;
@@ -19,24 +19,19 @@ interface OtpLocationState {
 }
 
 const OtpVerification = () => {
-  const navigate  = useNavigate();
-  const location  = useLocation();
-  const { toast } = useToast();
-  const { login, profile } = useAuth();
+  const navigate       = useNavigate();
+  const location       = useLocation();
+  const { toast }      = useToast();
+  const { login }      = useAuth(); // ← only use login(), not profile
 
   const state = location.state as OtpLocationState | null;
 
-  // Redirect to login if no state (direct URL access)
+  // Redirect to login if arrived here directly without state
   useEffect(() => {
     if (!state?.userId || !state?.email) {
       navigate('/', { replace: true });
     }
   }, [state, navigate]);
-
-  // Redirect if already logged in
-  useEffect(() => {
-    if (profile) navigate(getRedirectPath(profile.role), { replace: true });
-  }, [profile, navigate]);
 
   const [otp, setOtp]                       = useState(['', '', '', '', '', '']);
   const [isVerifying, setIsVerifying]       = useState(false);
@@ -63,15 +58,14 @@ const OtpVerification = () => {
   const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
   const lockedUntilRef = useRef<Date | null>(lockedUntil);
 
-  // Keep ref in sync with state so interval never has a stale closure
   useEffect(() => {
     lockedUntilRef.current = lockedUntil;
   }, [lockedUntil]);
 
-  // ── Single interval, runs once on mount ───────────────────────────────────
+  // ── Single interval on mount ──────────────────────────────────────────────
   useEffect(() => {
     timerRef.current = setInterval(() => {
-      setOtpCountdown(prev => Math.max(0, prev - 1));
+      setOtpCountdown(prev  => Math.max(0, prev - 1));
       setResendCooldown(prev => Math.max(0, prev - 1));
 
       const lu = lockedUntilRef.current;
@@ -86,7 +80,7 @@ const OtpVerification = () => {
     }, 1000);
 
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, []); // empty deps — starts once, never restarts
+  }, []);
 
   const formatTime = (s: number) => {
     const m   = Math.floor(s / 60).toString().padStart(2, '0');
@@ -133,7 +127,7 @@ const OtpVerification = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-      // ── Step 1: Verify OTP code against backend ───────────────────────
+      // Step 1 — verify OTP with backend
       const res = await fetch(`${supabaseUrl}/functions/v1/verify-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
@@ -158,22 +152,19 @@ const OtpVerification = () => {
         return;
       }
 
-      // ── Step 2: OTP correct — sign in via Supabase ────────────────────
-      const { error: loginError } = await login(state!.email, state!.password);
-      if (loginError) {
-        toast({ title: 'Login error', description: loginError, variant: 'destructive' });
+      // Step 2 — OTP passed, complete the Supabase login
+      // login() returns the profile directly — no waiting for AuthContext state
+      const { error: loginError, profile } = await login(state!.email, state!.password);
+
+      if (loginError || !profile) {
+        toast({ title: 'Login error', description: loginError ?? 'Could not load profile', variant: 'destructive' });
         setIsVerifying(false);
         return;
       }
 
-      // ── Step 3: Navigate IMMEDIATELY — do not wait for AuthContext ────
-      // fetchUserProfile is already cached from login, so this is instant.
-      // Bypasses the onAuthStateChange + setTimeout(0) delay in AuthContext.
-      const userProfile  = await fetchUserProfile(state!.userId);
-      const redirectPath = getRedirectPath(userProfile?.role ?? 'student');
-
+      // Step 3 — navigate immediately using the profile returned by login()
       toast({ title: 'Login Successful', description: 'Welcome back!' });
-      navigate(redirectPath, { replace: true });
+      navigate(getRedirectPath(profile.role), { replace: true });
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -257,7 +248,6 @@ const OtpVerification = () => {
               </div>
             </div>
 
-            {/* Shield icon */}
             <div className="flex justify-center">
               <div className={`w-20 h-20 rounded-full flex items-center justify-center ${
                 isLocked ? 'bg-destructive/10' : 'bg-primary/10'
@@ -273,7 +263,8 @@ const OtpVerification = () => {
               {isLocked
                 ? 'Too many failed attempts. Please wait before trying again.'
                 : <>
-                    A 6-digit OTP was sent to <span className="font-semibold text-foreground">{state.email}</span>
+                    A 6-digit OTP was sent to{' '}
+                    <span className="font-semibold text-foreground">{state.email}</span>
                     {state.contactNumber && (
                       <> and <span className="font-semibold text-foreground">••••{state.contactNumber.slice(-4)}</span></>
                     )}
@@ -373,10 +364,7 @@ const OtpVerification = () => {
                     ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     : <RefreshCw className="w-3.5 h-3.5" />
                   }
-                  {resendCooldown > 0
-                    ? `Resend in ${resendCooldown}s`
-                    : 'Resend OTP'
-                  }
+                  {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend OTP'}
                 </button>
               </div>
             </form>
