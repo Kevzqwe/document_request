@@ -2,24 +2,42 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const ALLOWED_ORIGINS = [
   'https://document-request.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:8080',
 ];
 
 function getCorsHeaders(req: Request) {
   const origin = req.headers.get('origin') || '';
   const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    'Access-Control-Allow-Origin': allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Origin':  allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, accept',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    'Content-Type':                 'application/json',
   };
+}
+
+// Map account_type → correct table
+function getTable(account_type: string): string | null {
+  switch (account_type) {
+    case 'admin':       return 'admins';
+    case 'cashier':     return 'cashiers';
+    case 'programhead': return 'programheads';
+    case 'student':     return 'students';
+    default:            return null;
+  }
 }
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
+
+  const respond = (body: object, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: corsHeaders });
 
   try {
     const supabaseAdmin = createClient(
@@ -27,57 +45,51 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
-    // Verify admin token
+    // Verify token
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    if (!authHeader?.startsWith('Bearer ')) {
+      return respond({ error: 'Unauthorized' }, 401);
     }
 
     const token = authHeader.replace('Bearer ', '').trim();
     const { data: { user: caller }, error: authError } = await supabaseAdmin.auth.getUser(token);
 
     if (authError || !caller) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return respond({ error: 'Unauthorized' }, 401);
     }
 
-    // Check admin role
-    const { data: roleData } = await supabaseAdmin
-      .from('user_roles')
-      .select('role')
+    // Check caller is admin — check admins table directly (no user_roles dependency)
+    const { data: adminRow } = await supabaseAdmin
+      .from('admins')
+      .select('id')
       .eq('user_id', caller.id)
-      .eq('role', 'admin')
-      .single();
+      .eq('is_archived', false)
+      .maybeSingle();
 
-    if (!roleData) {
-      return new Response(JSON.stringify({ error: 'Forbidden: admin only' }), {
-        status: 403,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    if (!adminRow) {
+      return respond({ error: 'Forbidden: admin only' }, 403);
     }
 
     const body = await req.json();
     const { user_id, account_type, action } = body;
-    // action: 'archive' | 'unarchive'
-    // account_type: 'student' | 'admin'
 
     if (!user_id || !account_type || !action) {
-      return new Response(JSON.stringify({ error: 'user_id, account_type and action are required' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return respond({ error: 'user_id, account_type, and action are required' }, 400);
+    }
+
+    if (action !== 'archive' && action !== 'unarchive') {
+      return respond({ error: 'action must be "archive" or "unarchive"' }, 400);
+    }
+
+    // ── Route to the correct table ────────────────────────────────────────
+    const table = getTable(account_type);
+    if (!table) {
+      return respond({ error: `Unknown account_type: ${account_type}` }, 400);
     }
 
     const isArchiving = action === 'archive';
-    const table = account_type === 'admin' ? 'admins' : 'students';
 
-    // Update is_archived in the table
-    const { error: updateError } = await supabaseAdmin
+    const { error: updateError, count } = await supabaseAdmin
       .from(table)
       .update({
         is_archived: isArchiving,
@@ -87,27 +99,18 @@ Deno.serve(async (req) => {
 
     if (updateError) {
       console.error('Archive update error:', updateError.message);
-      return new Response(JSON.stringify({ error: updateError.message }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return respond({ error: updateError.message }, 400);
     }
 
-    console.log(`User ${user_id} ${action}d successfully`);
+    console.log(`User ${user_id} ${action}d in table ${table} (rows affected: ${count})`);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: `Account ${isArchiving ? 'archived' : 'unarchived'} successfully`,
-      }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return respond({
+      success: true,
+      message: `Account ${isArchiving ? 'archived' : 'restored'} successfully`,
+    });
 
   } catch (err: any) {
     console.error('Unexpected error:', err);
-    return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return respond({ error: err.message || 'Internal server error' }, 500);
   }
 });
