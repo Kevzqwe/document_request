@@ -1,9 +1,15 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 
+const ALLOWED_ORIGINS = [
+  'https://document-request.vercel.app',
+];
+
 function getCorsHeaders(req: Request) {
+  const origin        = req.headers.get('origin') || '';
+  const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Origin':  allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-application-name',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
   };
 }
@@ -43,7 +49,7 @@ serve(async (req) => {
     } = body;
 
     // Unique external ID per request
-    const externalId = `doc-req-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    const externalId        = `doc-req-${Date.now()}-${Math.random().toString(36).substring(7)}`;
     const successUrlWithRef = `${successUrl}?external_id=${externalId}`;
 
     console.log('External ID:', externalId);
@@ -90,8 +96,8 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        success:          true,
-        checkoutUrl:      invoiceData.invoice_url,
+        success:           true,
+        checkoutUrl:       invoiceData.invoice_url,
         checkoutSessionId: invoiceData.id,
         externalId,
       }),
