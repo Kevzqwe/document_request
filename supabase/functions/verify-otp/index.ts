@@ -1,29 +1,44 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const ALLOWED_ORIGINS = ['https://document-request.vercel.app'];
+const ALLOWED_ORIGINS = [
+  'https://document-request.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:8080',
+];
 
 function getCorsHeaders(req: Request) {
   const origin  = req.headers.get('origin') || '';
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    'Access-Control-Allow-Origin': allowed,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Origin':  allowed,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, accept',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type':                 'application/json',
   };
 }
 
-const MAX_ATTEMPTS  = 5;         // lock after 5 wrong attempts
-const LOCK_DURATION = 5 * 60000; // locked for 5 minutes
+const MAX_ATTEMPTS  = 5;
+const LOCK_DURATION = 5 * 60000; // 5 minutes
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
-  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
+
+  // Always handle OPTIONS preflight first
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  // Only allow POST
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: corsHeaders,
+    });
+  }
 
   const respond = (body: object, status = 200) =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    new Response(JSON.stringify(body), { status, headers: corsHeaders });
 
   try {
     const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
@@ -57,8 +72,8 @@ Deno.serve(async (req) => {
         const remainingMs   = lockedUntil.getTime() - Date.now();
         const remainingMins = Math.ceil(remainingMs / 60000);
         return respond({
-          error:   `Account locked. Too many failed attempts. Try again in ${remainingMins} minute(s).`,
-          locked:  true,
+          error:      `Account locked. Too many failed attempts. Try again in ${remainingMins} minute(s).`,
+          locked:     true,
           lockedUntil: otpRecord.locked_until,
         }, 429);
       }
@@ -79,7 +94,6 @@ Deno.serve(async (req) => {
       const remaining   = MAX_ATTEMPTS - newAttempts;
 
       if (newAttempts >= MAX_ATTEMPTS) {
-        // Lock the account for 5 minutes
         const lockedUntil = new Date(Date.now() + LOCK_DURATION).toISOString();
         await supabase
           .from('otp_codes')
@@ -87,13 +101,12 @@ Deno.serve(async (req) => {
           .eq('id', otpRecord.id);
 
         return respond({
-          error:   'Too many failed attempts. Your account is locked for 5 minutes.',
-          locked:  true,
+          error:      'Too many failed attempts. Your account is locked for 5 minutes.',
+          locked:     true,
           lockedUntil,
         }, 429);
       }
 
-      // Increment attempt count
       await supabase
         .from('otp_codes')
         .update({ attempts: newAttempts })

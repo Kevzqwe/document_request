@@ -1,15 +1,21 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { createTransport } from 'npm:nodemailer@6.9.9';
 
-const ALLOWED_ORIGINS = ['https://document-request.vercel.app'];
+const ALLOWED_ORIGINS = [
+  'https://document-request.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:8080',
+];
 
 function getCorsHeaders(req: Request) {
-  const origin = req.headers.get('origin') || '';
+  const origin  = req.headers.get('origin') || '';
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
-    'Access-Control-Allow-Origin': allowed,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Origin':  allowed,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, accept',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type':                 'application/json',
   };
 }
 
@@ -21,20 +27,29 @@ function generateOtp(): string {
 // Format phone number to E.164
 function formatPhone(phone: string): string {
   const cleaned = phone.replace(/\D/g, '');
-  if (cleaned.startsWith('0')) return '+63' + cleaned.substring(1);
+  if (cleaned.startsWith('0'))  return '+63' + cleaned.substring(1);
   if (!cleaned.startsWith('63')) return '+63' + cleaned;
   return '+' + cleaned;
 }
 
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
-  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
+
+  // Always handle OPTIONS preflight first
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  // Only allow POST
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: corsHeaders,
+    });
+  }
 
   const respond = (body: object, status = 200) =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    new Response(JSON.stringify(body), { status, headers: corsHeaders });
 
   try {
     const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
@@ -61,8 +76,8 @@ Deno.serve(async (req) => {
         const remainingMs   = lockedUntil.getTime() - Date.now();
         const remainingMins = Math.ceil(remainingMs / 60000);
         return respond({
-          error: `Account is locked due to too many failed attempts. Try again in ${remainingMins} minute(s).`,
-          locked: true,
+          error:      `Account is locked due to too many failed attempts. Try again in ${remainingMins} minute(s).`,
+          locked:     true,
           lockedUntil: existingOtp.locked_until,
         }, 429);
       }
