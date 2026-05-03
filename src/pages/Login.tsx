@@ -47,22 +47,20 @@ const Login = () => {
 
       const userId = data.user.id;
 
-      // Step 2 — fetch profile FIRST (needs active session for RLS),
-      // THEN sign out — must be sequential, not parallel
-      const userProfile = await fetchUserProfile(userId);
-      await supabase.auth.signOut();
+      // Step 2 — fetch profile AND sign out in parallel (both need the active session,
+      // but signOut doesn't depend on the profile result — run them concurrently)
+      const [userProfile] = await Promise.all([
+        fetchUserProfile(userId),
+        supabase.auth.signOut(),
+      ]);
 
       const contactNumber = userProfile?.contactNumber || '';
 
       // Step 3 — send OTP
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept':       'application/json',
-          'apikey':       supabaseAnonKey,
-        },
-        body: JSON.stringify({ userId, email, contactNumber }),
+        headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
+        body:    JSON.stringify({ userId, email, contactNumber }),
       });
 
       const otpData = await res.json();
