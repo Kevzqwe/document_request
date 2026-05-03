@@ -26,125 +26,98 @@ export interface AuthSession {
   profile: UserProfile;
 }
 
-// Fetch user profile from the database based on role
+// Fetch user profile — queries all 4 role tables in parallel.
+// No longer touches user_roles table (was causing 406 errors).
 export async function fetchUserProfile(userId: string): Promise<UserProfile | null> {
-  const { data: roleData } = await supabase
-    .from('user_roles')
-    .select('role')
-    .eq('user_id', userId)
-    .single();
+  const [adminRes, cashierRes, programheadRes, studentRes] = await Promise.all([
+    supabase.from('admins').select('*').eq('user_id', userId).maybeSingle(),
+    supabase.from('cashiers').select('*').eq('user_id', userId).maybeSingle(),
+    supabase.from('programheads').select('*').eq('user_id', userId).maybeSingle(),
+    supabase.from('students').select('*').eq('user_id', userId).maybeSingle(),
+  ]);
 
-  if (!roleData) return null;
-
-  const role = roleData.role as UserProfile['role'];
-
-  if (role === 'admin') {
-    const { data } = await supabase
-      .from('admins')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-
-    if (!data) return null;
-
+  if (adminRes.data) {
+    const d = adminRes.data;
     return {
-      id: data.id,
-      user_id: data.user_id,
-      username: data.username,
-      firstName: data.first_name,
-      lastName: data.last_name,
-      middleName: data.middle_name,
-      contactNumber: data.contact_number,
-      gradeLevel: null,
-      section: null,
-      avatarUrl: data.avatar_url ?? null,
-      studentId: null,
-      role: 'admin',
+      id:            d.id,
+      user_id:       d.user_id,
+      username:      d.username,
+      firstName:     d.first_name,
+      lastName:      d.last_name,
+      middleName:    d.middle_name,
+      contactNumber: d.contact_number,
+      gradeLevel:    null,
+      section:       null,
+      avatarUrl:     d.avatar_url ?? null,
+      studentId:     null,
+      role:          'admin',
     };
   }
 
-  if (role === 'cashier') {
-    const { data } = await supabase
-      .from('cashiers')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-
-    if (!data) return null;
-
+  if (cashierRes.data) {
+    const d = cashierRes.data;
     return {
-      id: data.id,
-      user_id: data.user_id,
-      username: data.username,
-      firstName: data.first_name,
-      lastName: data.last_name,
-      middleName: data.middle_name,
-      contactNumber: data.contact_number,
-      gradeLevel: null,
-      section: null,
-      avatarUrl: data.avatar_url ?? null,
-      studentId: null,
-      role: 'cashier',
+      id:            d.id,
+      user_id:       d.user_id,
+      username:      d.username,
+      firstName:     d.first_name,
+      lastName:      d.last_name,
+      middleName:    d.middle_name,
+      contactNumber: d.contact_number,
+      gradeLevel:    null,
+      section:       null,
+      avatarUrl:     d.avatar_url ?? null,
+      studentId:     null,
+      role:          'cashier',
     };
   }
 
-  if (role === 'programhead') {
-    const { data } = await supabase
-      .from('programheads')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-
-    if (!data) return null;
-
+  if (programheadRes.data) {
+    const d = programheadRes.data;
     return {
-      id: data.id,
-      user_id: data.user_id,
-      username: data.username,
-      firstName: data.first_name,
-      lastName: data.last_name,
-      middleName: data.middle_name,
-      contactNumber: data.contact_number,
-      gradeLevel: null,
-      section: null,
-      avatarUrl: data.avatar_url ?? null,
-      studentId: null,
-      role: 'programhead',
+      id:            d.id,
+      user_id:       d.user_id,
+      username:      d.username,
+      firstName:     d.first_name,
+      lastName:      d.last_name,
+      middleName:    d.middle_name,
+      contactNumber: d.contact_number,
+      gradeLevel:    null,
+      section:       null,
+      avatarUrl:     d.avatar_url ?? null,
+      studentId:     null,
+      role:          'programhead',
     };
   }
 
-  // student
-  const { data } = await supabase
-    .from('students')
-    .select('*')
-    .eq('user_id', userId)
-    .single();
+  if (studentRes.data) {
+    const d = studentRes.data;
+    return {
+      id:            d.id,
+      user_id:       d.user_id,
+      username:      d.username,
+      firstName:     d.first_name,
+      lastName:      d.last_name,
+      middleName:    d.middle_name,
+      contactNumber: d.contact_number,
+      gradeLevel:    d.grade_level,
+      section:       d.section,
+      avatarUrl:     d.avatar_url ?? null,
+      studentId:     (d as any).student_id || null,
+      role:          'student',
+    };
+  }
 
-  if (!data) return null;
-
-  return {
-    id: data.id,
-    user_id: data.user_id,
-    username: data.username,
-    firstName: data.first_name,
-    lastName: data.last_name,
-    middleName: data.middle_name,
-    contactNumber: data.contact_number,
-    gradeLevel: data.grade_level,
-    section: data.section,
-    avatarUrl: data.avatar_url ?? null,
-    studentId: (data as any).student_id || null,
-    role: 'student',
-  };
+  return null;
 }
 
 // Get redirect path based on role
 export function getRedirectPath(role: UserProfile['role']): string {
   switch (role) {
-    case 'admin':      return '/admin/dashboard';
-    case 'cashier':    return '/admin/payments';
+    case 'admin':       return '/admin/dashboard';
+    case 'cashier':     return '/admin/payments';
     case 'programhead': return '/admin/students';
-    case 'student':    return '/student/dashboard';
-    default:           return '/';
+    case 'student':     return '/student/dashboard';
+    default:            return '/';
   }
 }
