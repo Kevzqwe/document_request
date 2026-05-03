@@ -21,6 +21,7 @@ const Login = () => {
   const navigate  = useNavigate();
   const { toast } = useToast();
 
+  // Already authenticated — go to dashboard
   useEffect(() => {
     if (isAuthenticated && profile && !authLoading) {
       navigate(getRedirectPath(profile.role));
@@ -46,31 +47,23 @@ const Login = () => {
 
       const userId = data.user.id;
 
-      // Step 2 — fetch profile FIRST (RLS needs active session),
-      // THEN sign out. Must be sequential — parallel kills the session
-      // mid-query and contactNumber comes back empty, breaking SMS.
-      const userProfile = await fetchUserProfile(userId);
-      await supabase.auth.signOut();
+      // Step 2 — fetch profile AND sign out in parallel (both need the active session,
+      // but signOut doesn't depend on the profile result — run them concurrently)
+      const [userProfile] = await Promise.all([
+        fetchUserProfile(userId),
+        supabase.auth.signOut(),
+      ]);
 
-      const contactNumber = userProfile?.contactNumber ?? '';
-
-      console.log('userProfile fetched:', userProfile);
-      console.log('contactNumber to send:', contactNumber);
+      const contactNumber = userProfile?.contactNumber || '';
 
       // Step 3 — send OTP
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept':       'application/json',
-          'apikey':       supabaseAnonKey,
-        },
-        body: JSON.stringify({ userId, email, contactNumber }),
+        headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
+        body:    JSON.stringify({ userId, email, contactNumber }),
       });
 
       const otpData = await res.json();
-
-      console.log('send-otp response:', otpData);
 
       if (!res.ok) {
         if (otpData.locked) {
