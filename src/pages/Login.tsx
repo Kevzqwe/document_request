@@ -33,6 +33,9 @@ const Login = () => {
     setIsLoading(true);
 
     try {
+      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
       // Step 1 — verify credentials
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
@@ -42,18 +45,18 @@ const Login = () => {
         return;
       }
 
-      const userId          = data.user.id;
-      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const userId = data.user.id;
 
-      // Step 2 — fetch profile first, THEN sign out
-      // (must be sequential — RLS requires an active session to query user_roles)
-      const userProfile = await fetchUserProfile(userId);
-      await supabase.auth.signOut();
+      // Step 2 — fetch profile AND sign out in parallel (both need the active session,
+      // but signOut doesn't depend on the profile result — run them concurrently)
+      const [userProfile] = await Promise.all([
+        fetchUserProfile(userId),
+        supabase.auth.signOut(),
+      ]);
 
       const contactNumber = userProfile?.contactNumber || '';
 
-      // Step 3 — send OTP (now has contactNumber for SMS)
+      // Step 3 — send OTP
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
