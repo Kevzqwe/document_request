@@ -8,6 +8,11 @@ import { useToast } from '@/hooks/use-toast';
 import { User, Phone, GraduationCap, Edit2, Save, X, Camera, LogOut, Loader2, Lock } from 'lucide-react';
 import { profileStorage } from '@/lib/profileStorage';
 import { supabase } from '@/integrations/supabase/client';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { AlertTriangle } from 'lucide-react';
 
 const Account = () => {
   const { profile, user, logout, refreshProfile } = useAuth();
@@ -20,6 +25,11 @@ const Account = () => {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+
+  // ── Contact number error modal ────────────────────────────────────────────
+  const [contactErrorOpen,    setContactErrorOpen]    = useState(false);
+  const [contactErrorMessage, setContactErrorMessage] = useState('');
+
   const [editedInfo, setEditedInfo] = useState({
     firstName: profile?.firstName || '',
     middleName: profile?.middleName || '',
@@ -94,6 +104,18 @@ const Account = () => {
   const handleSave = async () => {
     if (!user?.id) return;
 
+    // ── Normalize & validate contact number ──────────────────────────────
+    let contact = editedInfo.contactNumber || '';
+    if (contact) {
+      // Auto-fix: "9xxxxxxxxx" (10 digits) → "09xxxxxxxxx"
+      if (contact.startsWith('9') && contact.length === 10) contact = '0' + contact;
+      if (contact.length !== 11) {
+        setContactErrorMessage('Failed to save: number must be 11 digits.');
+        setContactErrorOpen(true);
+        return;
+      }
+    }
+
     // Validate password if provided
     if (newPassword) {
       if (newPassword.length < 6) {
@@ -115,7 +137,7 @@ const Account = () => {
         first_name:     editedInfo.firstName,
         middle_name:    editedInfo.middleName  || null,
         last_name:      editedInfo.lastName,
-        contact_number: editedInfo.contactNumber || null,
+        contact_number: contact || null,
       })
       .eq('user_id', user.id);
 
@@ -124,6 +146,9 @@ const Account = () => {
       setIsSaving(false);
       return;
     }
+
+    // Sync normalized number back into form state
+    setEditedInfo(prev => ({ ...prev, contactNumber: contact }));
 
     // ✅ Update password with fresh session to avoid 400 error
     if (newPassword) {
@@ -159,7 +184,7 @@ const Account = () => {
       firstName:     editedInfo.firstName,
       lastName:      editedInfo.lastName,
       middleName:    editedInfo.middleName,
-      contactNumber: editedInfo.contactNumber,
+      contactNumber: contact,
     });
 
     await refreshProfile();
@@ -392,6 +417,21 @@ const Account = () => {
         {isLoggingOut ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <LogOut className="w-4 h-4 mr-2" />}
         {isLoggingOut ? 'Logging out...' : 'Logout'}
       </Button>
+
+      {/* ── Contact Number Error Modal ─────────────────────────────────────── */}
+      <AlertDialog open={contactErrorOpen} onOpenChange={setContactErrorOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />Invalid Contact Number
+            </AlertDialogTitle>
+            <AlertDialogDescription>{contactErrorMessage}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setContactErrorOpen(false)}>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

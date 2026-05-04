@@ -88,6 +88,16 @@ const invokeWithAuth = async (fnName: string, body: object) => {
   }
 };
 
+// ── Normalize a raw contact number string from Excel ─────────────────────────
+// 1. Strip all non-digit characters
+// 2. If starts with "9" and is exactly 10 digits → prepend "0" to make "09..."
+// 3. If the result is not exactly 11 digits → return '' (invalid, will be flagged and skipped)
+const normalizeContactNumber = (raw: string): string => {
+  const digits = raw.replace(/\D/g, '');
+  const normalized = digits.startsWith('9') && digits.length === 10 ? '0' + digits : digits;
+  return normalized.length === 11 ? normalized : '';
+};
+
 const AdminStudentManagement = () => {
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -112,6 +122,10 @@ const AdminStudentManagement = () => {
   const [duplicateAlertOpen, setDuplicateAlertOpen] = useState(false);
   const [duplicateAlertMessage, setDuplicateAlertMessage] = useState('');
   const [importDuplicates, setImportDuplicates] = useState<string[]>([]);
+
+  // ── Contact number error modal ────────────────────────────────────────────
+  const [contactErrorOpen, setContactErrorOpen] = useState(false);
+  const [contactErrorMessage, setContactErrorMessage] = useState('');
 
   const fetchStudents = async () => {
     setLoading(true);
@@ -236,7 +250,13 @@ const AdminStudentManagement = () => {
       section: formData.section || null,
     });
     if (error) {
-      toast({ title: 'Error', description: error.message || 'Failed to update student.', variant: 'destructive' });
+      const msg = error.message || 'Failed to update student.';
+      if (msg.toLowerCase().includes('11 digits')) {
+        setContactErrorMessage(msg);
+        setContactErrorOpen(true);
+      } else {
+        toast({ title: 'Error', description: msg, variant: 'destructive' });
+      }
     } else {
       toast({ title: 'Updated', description: 'Student profile has been updated.' });
       setFormOpen(false);
@@ -314,15 +334,20 @@ const AdminStudentManagement = () => {
           setInvalidFormatOpen(true);
           return;
         }
-        const mapped: StudentFormData[] = rows.map((r) => ({
-          username: r['email'] || r['Email'] || r['username'] || r['Username'] || '',
-          first_name: r['first_name'] || r['First Name'] || r['FirstName'] || '',
-          last_name: r['last_name'] || r['Last Name'] || r['LastName'] || '',
-          middle_name: r['middle_name'] || r['Middle Name'] || r['MiddleName'] || '',
-          contact_number: String(r['contact_number'] || r['Contact Number'] || r['Phone'] || r['phone'] || ''),
-          grade_level: r['grade_level'] || r['Grade Level'] || r['Grade'] || '',
-          section: r['section'] || r['Section'] || '',
-        }));
+        const mapped: StudentFormData[] = rows.map((r) => {
+          const rawContact = String(r['contact_number'] || r['Contact Number'] || r['Phone'] || r['phone'] || '');
+          // Normalize: auto-fix "9xxxxxxxxx" → "09xxxxxxxxx", blank out anything that isn't 11 digits
+          const normalizedContact = normalizeContactNumber(rawContact);
+          return {
+            username: r['email'] || r['Email'] || r['username'] || r['Username'] || '',
+            first_name: r['first_name'] || r['First Name'] || r['FirstName'] || '',
+            last_name: r['last_name'] || r['Last Name'] || r['LastName'] || '',
+            middle_name: r['middle_name'] || r['Middle Name'] || r['MiddleName'] || '',
+            contact_number: normalizedContact, // '' = invalid → row flagged red and skipped on import
+            grade_level: r['grade_level'] || r['Grade Level'] || r['Grade'] || '',
+            section: r['section'] || r['Section'] || '',
+          };
+        });
         const duplicates: string[] = [];
         const uniqueRows: StudentFormData[] = [];
         const seen = new Set<string>();
@@ -351,6 +376,7 @@ const AdminStudentManagement = () => {
     setImporting(true);
     let success = 0, failed = 0;
     for (const row of importPreview) {
+      // Skip rows missing required fields OR with an invalid/empty contact number
       if (!row.username || !row.first_name || !row.last_name || !row.contact_number) { failed++; continue; }
       const { error } = await invokeWithAuth('create-student', {
         email: row.username, first_name: row.first_name, last_name: row.last_name,
@@ -612,6 +638,21 @@ const AdminStudentManagement = () => {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* ── Contact Number Error Modal ─────────────────────────────────────── */}
+      <AlertDialog open={contactErrorOpen} onOpenChange={setContactErrorOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />Invalid Contact Number
+            </AlertDialogTitle>
+            <AlertDialogDescription>{contactErrorMessage}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setContactErrorOpen(false)}>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {isAdmin && (
         <Dialog open={importDialogOpen} onOpenChange={(open) => { if (!open && !importing) { setImportDialogOpen(false); setImportPreview([]); setImportDuplicates([]); } }}>
           <DialogContent className="max-w-3xl max-h-[80vh]">
@@ -647,7 +688,12 @@ const AdminStudentManagement = () => {
                           <TableCell>{i + 1}</TableCell>
                           <TableCell className="text-sm">{r.username || <span className="text-destructive">Missing</span>}</TableCell>
                           <TableCell className="text-sm">{r.first_name} {r.last_name}</TableCell>
-                          <TableCell className="text-sm">{r.contact_number || <span className="text-destructive">Missing</span>}</TableCell>
+                          <TableCell className="text-sm">
+                            {r.contact_number
+                              ? r.contact_number
+                              : <span className="text-destructive">Invalid / Missing</span>
+                            }
+                          </TableCell>
                           <TableCell className="text-sm">{r.grade_level || '—'}</TableCell>
                           <TableCell className="text-sm">{r.section || '—'}</TableCell>
                         </TableRow>
@@ -655,7 +701,7 @@ const AdminStudentManagement = () => {
                     </TableBody>
                   </Table>
                 </div>
-                <p className="text-sm text-muted-foreground">Rows in red are missing required fields and will be skipped.</p>
+                <p className="text-sm text-muted-foreground">Rows in red are missing required fields or have an invalid contact number and will be skipped.</p>
               </>
             ) : (
               <div className="text-center py-8 text-muted-foreground">

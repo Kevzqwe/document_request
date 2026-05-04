@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const student_id     = toStr(body.student_id); // the table row id (not STU-xxx)
+    const student_id     = toStr(body.student_id);
     const first_name     = toStr(body.first_name);
     const last_name      = toStr(body.last_name);
     const middle_name    = toStr(body.middle_name);
@@ -75,13 +75,24 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Normalize and validate contact number
+    let normalizedContact: string | null = contact_number || null;
+    if (normalizedContact) {
+      if (normalizedContact.startsWith('9')) normalizedContact = '0' + normalizedContact;
+      if (normalizedContact.length !== 11) {
+        return new Response(JSON.stringify({ error: 'Failed to save: number must be 11 digits' }), {
+          status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     const { error: updateError } = await supabaseAdmin
       .from('students')
       .update({
         first_name,
         last_name,
         middle_name:    middle_name    || null,
-        contact_number: contact_number || null,
+        contact_number: normalizedContact,
         grade_level:    grade_level    || null,
         section:        section        || null,
       })

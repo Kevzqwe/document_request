@@ -56,17 +56,17 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const record_id      = toStr(body.record_id);   // table row id
-    const account_type   = toStr(body.account_type); // 'admin' | 'cashier' | 'programhead'
+    const record_id      = toStr(body.record_id);
+    const account_type   = toStr(body.account_type);
     const first_name     = toStr(body.first_name);
     const last_name      = toStr(body.last_name);
     const middle_name    = toStr(body.middle_name);
     const contact_number = toStr(body.contact_number);
     const admin_role     = toStr(body.admin_role);
 
-    if (!record_id)    return new Response(JSON.stringify({ error: 'record_id is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!first_name)   return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!last_name)    return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!record_id)  return new Response(JSON.stringify({ error: 'record_id is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!first_name) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!last_name)  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
     const TABLE_MAP: Record<string, string> = {
       admin:       'admins',
@@ -81,14 +81,24 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Normalize and validate contact number
+    let normalizedContact: string | null = contact_number || null;
+    if (normalizedContact) {
+      if (normalizedContact.startsWith('9')) normalizedContact = '0' + normalizedContact;
+      if (normalizedContact.length !== 11) {
+        return new Response(JSON.stringify({ error: 'Failed to save: number must be 11 digits' }), {
+          status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     const updatePayload: Record<string, any> = {
       first_name,
       last_name,
       middle_name:    middle_name    || null,
-      contact_number: contact_number || null,
+      contact_number: normalizedContact,
     };
 
-    // Only update admin_role for admins table
     if (account_type === 'admin' && admin_role) {
       updatePayload.admin_role = admin_role;
     }
