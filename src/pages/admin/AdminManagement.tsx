@@ -450,7 +450,7 @@ const AdminManagement = () => {
             <DialogDescription>
               {editingAdmin
                 ? 'Update the profile information below.'
-                : 'Fill in the details. Password will be auto-generated from last name + last 4 digits of contact number.'}
+                : 'Fill in the details to create a new account.'}
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-4">
