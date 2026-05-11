@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,12 +11,12 @@ import pcsLogo from '@/assets/PCSlogo.png';
 type StudentType = 'alumni' | 'current' | null;
 
 const VerifyStudent = () => {
-  const [studentType, setStudentType]   = useState<StudentType>(null);
-  const [studentId, setStudentId]       = useState('');
+  const [studentType, setStudentType]       = useState<StudentType>(null);
+  const [studentId, setStudentId]           = useState('');
   const [graduationYear, setGraduationYear] = useState('');
-  const [yearLevel, setYearLevel]       = useState('');
-  const [section, setSection]           = useState('');
-  const [isLoading, setIsLoading]       = useState(false);
+  const [yearLevel, setYearLevel]           = useState('');
+  const [section, setSection]               = useState('');
+  const [isLoading, setIsLoading]           = useState(false);
 
   const navigate  = useNavigate();
   const location  = useLocation();
@@ -31,11 +31,15 @@ const VerifyStudent = () => {
     password: string;
   } | null;
 
-  // Guard: if someone navigates here directly without sign-up data, redirect
-  if (!signupData) {
-    navigate('/signup');
-    return null;
-  }
+  // Guard: redirect if arrived without sign-up data
+  // Must be in useEffect — calling navigate() during render is not allowed
+  useEffect(() => {
+    if (!signupData) {
+      navigate('/signup', { replace: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!signupData) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,8 +50,6 @@ const VerifyStudent = () => {
     setIsLoading(true);
 
     try {
-      // TODO: wire up to your Supabase registration + OTP flow.
-      // For now, pass everything to the next step (OTP or account creation).
       const payload = {
         ...signupData,
         studentType,
@@ -56,13 +58,7 @@ const VerifyStudent = () => {
         ...(studentType === 'current' ? { yearLevel, section } : {}),
       };
 
-      // Example: navigate to an OTP verification step
-      // navigate('/otp-verify', { state: payload });
-
-      toast({ title: 'Verification submitted', description: 'Proceeding to account creation…' });
-      console.log('Registration payload:', payload);
-
-      // Placeholder — replace with your actual next route
+      // TODO: replace with your Supabase registration + OTP call
       navigate('/otp-verify', { state: payload });
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -148,8 +144,8 @@ const VerifyStudent = () => {
                     </div>
                     {studentType === 'alumni' && (
                       <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-primary flex items-center justify-center">
-                        <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 12 12">
-                          <path d="M10 3L5 8.5 2 5.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                        <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 12 12">
+                          <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </div>
                     )}
@@ -176,8 +172,8 @@ const VerifyStudent = () => {
                     </div>
                     {studentType === 'current' && (
                       <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-primary flex items-center justify-center">
-                        <svg className="w-2.5 h-2.5 text-white" fill="currentColor" viewBox="0 0 12 12">
-                          <path d="M10 3L5 8.5 2 5.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                        <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 12 12">
+                          <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </div>
                     )}
