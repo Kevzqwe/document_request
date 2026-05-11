@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { Lock, Mail, Eye, EyeOff, Loader2 } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
@@ -21,7 +21,6 @@ const Login = () => {
   const navigate  = useNavigate();
   const { toast } = useToast();
 
-  // Already authenticated — go to dashboard
   useEffect(() => {
     if (isAuthenticated && profile && !authLoading) {
       navigate(getRedirectPath(profile.role));
@@ -36,7 +35,6 @@ const Login = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-      // Step 1 — verify credentials
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
@@ -47,8 +45,6 @@ const Login = () => {
 
       const userId = data.user.id;
 
-      // Step 2 — fetch profile AND sign out in parallel (both need the active session,
-      // but signOut doesn't depend on the profile result — run them concurrently)
       const [userProfile] = await Promise.all([
         fetchUserProfile(userId),
         supabase.auth.signOut(),
@@ -56,7 +52,6 @@ const Login = () => {
 
       const contactNumber = userProfile?.contactNumber || '';
 
-      // Step 3 — send OTP
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
@@ -69,12 +64,8 @@ const Login = () => {
         if (otpData.locked) {
           navigate('/otp-verify', {
             state: {
-              userId,
-              email,
-              password,
-              contactNumber,
-              locked:      true,
-              lockedUntil: otpData.lockedUntil,
+              userId, email, password, contactNumber,
+              locked: true, lockedUntil: otpData.lockedUntil,
             },
           });
         } else {
@@ -86,15 +77,8 @@ const Login = () => {
 
       toast({ title: 'OTP Sent', description: otpData.message });
 
-      // Step 4 — navigate to OTP page
       navigate('/otp-verify', {
-        state: {
-          userId,
-          email,
-          password,
-          contactNumber,
-          expiresAt: otpData.expiresAt,
-        },
+        state: { userId, email, password, contactNumber, expiresAt: otpData.expiresAt },
       });
 
     } catch (err: any) {
@@ -189,6 +173,17 @@ const Login = () => {
                   ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Sending OTP...</>
                   : 'Sign In'}
               </Button>
+
+              {/* Sign Up link */}
+              <p className="text-center text-sm text-muted-foreground pt-2">
+                Don't have an account?{' '}
+                <Link
+                  to="/signup"
+                  className="font-semibold text-primary hover:underline transition-colors"
+                >
+                  Sign up
+                </Link>
+              </p>
             </form>
           </CardContent>
         </Card>
