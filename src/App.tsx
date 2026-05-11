@@ -6,6 +6,8 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import VerifyStudent from "./pages/VerifyStudent";
 import OtpVerification from "./pages/OtpVerification";
 
 // Student pages
@@ -66,9 +68,11 @@ const App = () => (
         <AuthProvider>
           <Routes>
             {/* ── Public ──────────────────────────────────────────────── */}
-            <Route path="/"           element={<Login />} />
-            <Route path="/login"      element={<Navigate to="/" replace />} />
-            <Route path="/otp-verify" element={<OtpVerification />} />
+            <Route path="/"                element={<Login />} />
+            <Route path="/login"           element={<Navigate to="/" replace />} />
+            <Route path="/signup"          element={<Signup />} />
+            <Route path="/verify-student"  element={<VerifyStudent />} />
+            <Route path="/otp-verify"      element={<OtpVerification />} />
 
             <Route element={<Layout />}>
 
