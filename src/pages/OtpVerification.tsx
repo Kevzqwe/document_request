@@ -1,135 +1,94 @@
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
+import { useState, useRef, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { ShieldCheck, Loader2, RefreshCw, ArrowLeft } from 'lucide-react';
+import { Loader2, Mail, RefreshCw } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
-import { getRedirectPath } from '@/lib/auth';
+import { supabase } from '@/integrations/supabase/client';
 
-interface OtpLocationState {
-  userId:        string;
-  email:         string;
-  password:      string;
-  contactNumber: string;
-  expiresAt?:    string;
-  locked?:       boolean;
-  lockedUntil?:  string;
-}
+const OTP_LENGTH = 6;
 
 const OtpVerification = () => {
-  const navigate  = useNavigate();
-  const location  = useLocation();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { toast } = useToast();
-  const { login, profile } = useAuth();
 
-  const state = location.state as OtpLocationState | null;
+  // State passed from Signup page
+  const {
+    userId,
+    email,
+    password,
+    expiresAt,
+  } = (location.state as {
+    userId: string;
+    email: string;
+    password: string;
+    expiresAt?: string;
+  }) || {};
 
-  // Redirect to login if no state (direct URL access)
+  const [otp, setOtp]               = useState<string[]>(Array(OTP_LENGTH).fill(''));
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [timeLeft, setTimeLeft]       = useState<number>(0);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Redirect away if accessed directly without state
   useEffect(() => {
-    if (!state?.userId || !state?.email) {
-      navigate('/', { replace: true });
+    if (!userId || !email) {
+      navigate('/signup', { replace: true });
     }
-  }, [state, navigate]);
+  }, [userId, email, navigate]);
 
-  // Navigate to dashboard once profile is set in context after login()
+  // Countdown timer
   useEffect(() => {
-    if (profile) {
-      navigate(getRedirectPath(profile.role), { replace: true });
-    }
-  }, [profile, navigate]);
+    if (!expiresAt) return;
+    const end = new Date(expiresAt).getTime();
+    const tick = () => {
+      const diff = Math.max(0, Math.floor((end - Date.now()) / 1000));
+      setTimeLeft(diff);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [expiresAt]);
 
-  const [otp, setOtp]                       = useState(['', '', '', '', '', '']);
-  const [isVerifying, setIsVerifying]       = useState(false);
-  const [isResending, setIsResending]       = useState(false);
-  const [otpCountdown, setOtpCountdown]     = useState(() =>
-    state?.expiresAt
-      ? Math.max(0, Math.ceil((new Date(state.expiresAt).getTime() - Date.now()) / 1000))
-      : 300
-  );
-  const [resendCooldown, setResendCooldown] = useState(60);
-  const [attemptsLeft, setAttemptsLeft]     = useState(5);
-  const [lockedUntil, setLockedUntil]       = useState<Date | null>(
-    state?.lockedUntil ? new Date(state.lockedUntil) : null
-  );
-  const [lockCountdown, setLockCountdown]   = useState(() =>
-    state?.locked && state?.lockedUntil
-      ? Math.max(0, Math.ceil((new Date(state.lockedUntil).getTime() - Date.now()) / 1000))
-      : 0
-  );
+  const formatTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-  const otpRefs        = useRef<(HTMLInputElement | null)[]>([]);
-  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Store lockedUntil in a ref so the single interval can always read latest value
-  // without needing to be recreated when lockedUntil state changes
-  const lockedUntilRef = useRef<Date | null>(lockedUntil);
-
-  useEffect(() => {
-    lockedUntilRef.current = lockedUntil;
-  }, [lockedUntil]);
-
-  // Single stable interval — never restarts, reads lockedUntil via ref
-  useEffect(() => {
-    timerRef.current = setInterval(() => {
-      setOtpCountdown(prev  => Math.max(0, prev - 1));
-      setResendCooldown(prev => Math.max(0, prev - 1));
-
-      const lu = lockedUntilRef.current;
-      if (lu) {
-        const rem = Math.ceil((lu.getTime() - Date.now()) / 1000);
-        setLockCountdown(Math.max(0, rem));
-        if (rem <= 0) {
-          setLockedUntil(null);
-          lockedUntilRef.current = null;
-        }
-      }
-    }, 1000);
-
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, []); // empty deps — interval created once, never restarted
-
-  const formatTime = (s: number) => {
-    const m   = Math.floor(s / 60).toString().padStart(2, '0');
-    const sec = (s % 60).toString().padStart(2, '0');
-    return `${m}:${sec}`;
-  };
-
-  // ── OTP input handlers ────────────────────────────────────────────────────
-  const handleOtpChange = (index: number, value: string) => {
+  const handleChange = (index: number, value: string) => {
     if (!/^\d*$/.test(value)) return;
     const next = [...otp];
     next[index] = value.slice(-1);
     setOtp(next);
-    if (value && index < 5) otpRefs.current[index + 1]?.focus();
+    if (value && index < OTP_LENGTH - 1) {
+      inputRefs.current[index + 1]?.focus();
+    }
   };
 
-  const handleKeyDown = (index: number, e: React.KeyboardEvent) => {
+  const handleKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      otpRefs.current[index - 1]?.focus();
+      inputRefs.current[index - 1]?.focus();
     }
   };
 
   const handlePaste = (e: React.ClipboardEvent) => {
     e.preventDefault();
-    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
-    const next   = [...otp];
-    pasted.split('').forEach((c, i) => { if (i < 6) next[i] = c; });
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH);
+    if (!pasted) return;
+    const next = [...otp];
+    pasted.split('').forEach((ch, i) => { next[i] = ch; });
     setOtp(next);
-    otpRefs.current[Math.min(pasted.length, 5)]?.focus();
+    inputRefs.current[Math.min(pasted.length, OTP_LENGTH - 1)]?.focus();
   };
 
-  // ── Verify OTP ────────────────────────────────────────────────────────────
-  const handleVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const otpCode = otp.join('');
-    if (otpCode.length !== 6) {
-      toast({ title: 'Enter all 6 digits', variant: 'destructive' });
+  const handleVerify = async () => {
+    const code = otp.join('');
+    if (code.length < OTP_LENGTH) {
+      toast({ title: 'Incomplete OTP', description: 'Please enter all 6 digits.', variant: 'destructive' });
       return;
     }
 
     setIsVerifying(true);
-
     try {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -137,34 +96,27 @@ const OtpVerification = () => {
       const res = await fetch(`${supabaseUrl}/functions/v1/verify-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-        body:    JSON.stringify({ userId: state!.userId, otpCode }),
+        body:    JSON.stringify({ userId, otp: code }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        if (data.locked) {
-          const lu = new Date(data.lockedUntil);
-          setLockedUntil(lu);
-          lockedUntilRef.current = lu;
-          setLockCountdown(Math.ceil((lu.getTime() - Date.now()) / 1000));
-        } else if (data.remaining !== undefined) {
-          setAttemptsLeft(data.remaining);
-          setOtp(['', '', '', '', '', '']);
-          otpRefs.current[0]?.focus();
-        }
-        toast({ title: 'Verification Failed', description: data.error, variant: 'destructive' });
+        toast({ title: 'Invalid OTP', description: data.error || 'The code you entered is incorrect.', variant: 'destructive' });
         setIsVerifying(false);
         return;
       }
 
-      // OTP correct — login() sets profile in context → useEffect above navigates
-      const { error: loginError } = await login(state!.email, state!.password);
-      if (loginError) {
-        toast({ title: 'Login error', description: loginError, variant: 'destructive' });
+      // OTP verified — sign the user in now
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) {
+        toast({ title: 'Sign-in failed', description: signInError.message, variant: 'destructive' });
         setIsVerifying(false);
+        return;
       }
-      // Don't setIsVerifying(false) on success — keep spinner while navigating
+
+      toast({ title: 'Account verified!', description: 'Welcome to PCS Document Request System.' });
+      navigate('/student/dashboard', { replace: true });
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -172,11 +124,8 @@ const OtpVerification = () => {
     }
   };
 
-  // ── Resend OTP ────────────────────────────────────────────────────────────
   const handleResend = async () => {
-    if (isResending || lockedUntilRef.current || resendCooldown > 0) return;
     setIsResending(true);
-
     try {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -184,30 +133,18 @@ const OtpVerification = () => {
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-        body:    JSON.stringify({
-          userId:        state!.userId,
-          email:         state!.email,
-          contactNumber: state!.contactNumber,
-        }),
+        // Only email is needed; no contactNumber since this is email OTP
+        body:    JSON.stringify({ userId, email }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        if (data.locked) {
-          const lu = new Date(data.lockedUntil);
-          setLockedUntil(lu);
-          lockedUntilRef.current = lu;
-          setLockCountdown(Math.ceil((lu.getTime() - Date.now()) / 1000));
-        }
-        toast({ title: 'Failed to resend', description: data.error, variant: 'destructive' });
+        toast({ title: 'Failed to resend OTP', description: data.error, variant: 'destructive' });
       } else {
-        setOtp(['', '', '', '', '', '']);
-        setOtpCountdown(300);
-        setResendCooldown(60);
-        setAttemptsLeft(5);
-        otpRefs.current[0]?.focus();
-        toast({ title: 'OTP Resent', description: data.message });
+        toast({ title: 'OTP Resent', description: 'A new code has been sent to your email.' });
+        setOtp(Array(OTP_LENGTH).fill(''));
+        inputRefs.current[0]?.focus();
       }
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -215,13 +152,6 @@ const OtpVerification = () => {
       setIsResending(false);
     }
   };
-
-  if (!state?.userId) return null;
-
-  const isLocked  = !!lockedUntilRef.current && lockCountdown > 0;
-  const isExpired = otpCountdown === 0;
-  const canSubmit = otp.join('').length === 6 && !isLocked && !isExpired && !isVerifying;
-  const canResend = !isResending && !isLocked && resendCooldown === 0;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/70 via-primary-light/60 to-accent/50 p-4">
@@ -241,127 +171,80 @@ const OtpVerification = () => {
 
         {/* Right — OTP form */}
         <Card className="w-full shadow-2xl border-2">
-          <CardHeader className="space-y-4 pb-2">
-            <div className="flex justify-center lg:hidden mb-2">
-              <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center p-2 shadow-lg">
+          <CardHeader className="space-y-4 pb-6">
+            <div className="flex justify-center lg:hidden">
+              <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center p-2 shadow-lg">
                 <img src={pcsLogo} alt="PCS Logo" className="w-full h-full object-contain" />
               </div>
             </div>
-
             <div className="flex justify-center">
-              <div className={`w-20 h-20 rounded-full flex items-center justify-center ${
-                isLocked ? 'bg-destructive/10' : 'bg-primary/10'
-              }`}>
-                <ShieldCheck className={`w-10 h-10 ${isLocked ? 'text-destructive' : 'text-primary'}`} />
+              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
+                <Mail className="w-8 h-8 text-primary" />
               </div>
             </div>
-
-            <CardTitle className="text-2xl text-center">
-              {isLocked ? 'Account Temporarily Locked' : 'Two-Factor Verification'}
-            </CardTitle>
-            <p className="text-center text-muted-foreground text-sm px-4">
-              {isLocked
-                ? 'Too many failed attempts. Please wait before trying again.'
-                : <>
-                    A 6-digit OTP was sent to{' '}
-                    <span className="font-semibold text-foreground">{state.email}</span>
-                    {state.contactNumber && (
-                      <> and <span className="font-semibold text-foreground">••••{state.contactNumber.slice(-4)}</span></>
-                    )}
-                  </>
-              }
+            <CardTitle className="text-3xl text-center">Verify Your Email</CardTitle>
+            <p className="text-center text-muted-foreground text-sm">
+              We sent a 6-digit code to<br />
+              <span className="font-semibold text-foreground">{email}</span>
             </p>
           </CardHeader>
 
-          <CardContent className="pt-4">
-            <form onSubmit={handleVerify} className="space-y-6">
+          <CardContent className="space-y-6">
+            {/* OTP inputs */}
+            <div className="flex gap-2 justify-center" onPaste={handlePaste}>
+              {otp.map((digit, i) => (
+                <input
+                  key={i}
+                  ref={(el) => { inputRefs.current[i] = el; }}
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={digit}
+                  onChange={(e) => handleChange(i, e.target.value)}
+                  onKeyDown={(e) => handleKeyDown(i, e)}
+                  className="w-12 h-14 text-center text-xl font-bold border-2 rounded-lg focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all bg-background"
+                />
+              ))}
+            </div>
 
-              {isLocked && (
-                <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-xl text-center space-y-1">
-                  <p className="text-destructive font-semibold">🔒 Account Locked</p>
-                  <p className="text-destructive/80 text-sm">
-                    Unlocks in <span className="font-mono font-bold text-lg">{formatTime(lockCountdown)}</span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">Too many incorrect OTP attempts</p>
-                </div>
-              )}
+            {/* Timer */}
+            {timeLeft > 0 && (
+              <p className="text-center text-sm text-muted-foreground">
+                Code expires in <span className="font-semibold text-foreground">{formatTime(timeLeft)}</span>
+              </p>
+            )}
+            {timeLeft === 0 && expiresAt && (
+              <p className="text-center text-sm text-destructive font-medium">
+                Code has expired. Please request a new one.
+              </p>
+            )}
 
-              {!isLocked && (
-                <div className={`text-center text-sm font-medium ${
-                  otpCountdown < 60 ? 'text-destructive' : 'text-muted-foreground'
-                }`}>
-                  {isExpired
-                    ? <span className="text-destructive">⏱ OTP expired — request a new one below</span>
-                    : <>Code expires in <span className="font-mono font-bold">{formatTime(otpCountdown)}</span></>
-                  }
-                </div>
-              )}
+            {/* Verify button */}
+            <Button
+              onClick={handleVerify}
+              className="w-full h-12 text-base font-semibold"
+              disabled={isVerifying || otp.join('').length < OTP_LENGTH}
+            >
+              {isVerifying
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>
+                : 'Verify & Continue'}
+            </Button>
 
-              <div className="flex justify-center gap-3">
-                {otp.map((digit, index) => (
-                  <input
-                    key={index}
-                    ref={el => { otpRefs.current[index] = el; }}
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={1}
-                    value={digit}
-                    onChange={(e) => handleOtpChange(index, e.target.value)}
-                    onKeyDown={(e) => handleKeyDown(index, e)}
-                    onPaste={handlePaste}
-                    disabled={isLocked || isExpired}
-                    autoFocus={index === 0}
-                    className={`w-12 h-16 text-center text-2xl font-bold border-2 rounded-xl
-                      focus:outline-none transition-all
-                      ${digit ? 'border-primary bg-primary/5' : 'border-muted-foreground/30'}
-                      ${isLocked || isExpired ? 'opacity-40 cursor-not-allowed bg-muted' : 'hover:border-primary/50'}
-                    `}
-                  />
-                ))}
-              </div>
-
-              {attemptsLeft < 5 && !isLocked && (
-                <div className="text-center p-2 bg-amber-50 border border-amber-200 rounded-lg">
-                  <p className="text-amber-700 text-sm font-medium">
-                    ⚠️ {attemptsLeft} attempt{attemptsLeft !== 1 ? 's' : ''} remaining before 5-minute lock
-                  </p>
-                </div>
-              )}
-
+            {/* Resend */}
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground mb-2">Didn't receive the code?</p>
               <Button
-                type="submit"
-                className="w-full h-12 text-base font-semibold"
-                disabled={!canSubmit}
+                variant="ghost"
+                size="sm"
+                onClick={handleResend}
+                disabled={isResending}
+                className="text-primary hover:text-primary/80"
               >
-                {isVerifying
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>
-                  : 'Verify & Login'}
+                {isResending
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Sending...</>
+                  : <><RefreshCw className="w-4 h-4 mr-2" />Resend Code</>}
               </Button>
-
-              <div className="flex items-center justify-between text-sm pt-1">
-                <button
-                  type="button"
-                  onClick={() => navigate('/')}
-                  className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  Back to Login
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleResend}
-                  disabled={!canResend}
-                  className="flex items-center gap-1.5 text-primary hover:text-primary/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
-                >
-                  {isResending
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    : <RefreshCw className="w-3.5 h-3.5" />
-                  }
-                  {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend OTP'}
-                </button>
-              </div>
-            </form>
+            </div>
           </CardContent>
         </Card>
       </div>

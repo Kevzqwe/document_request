@@ -32,9 +32,6 @@ const Login = () => {
     setIsLoading(true);
 
     try {
-      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
@@ -43,43 +40,16 @@ const Login = () => {
         return;
       }
 
-      const userId = data.user.id;
+      const userProfile = await fetchUserProfile(data.user.id);
 
-      const [userProfile] = await Promise.all([
-        fetchUserProfile(userId),
-        supabase.auth.signOut(),
-      ]);
-
-      const contactNumber = userProfile?.contactNumber || '';
-
-      const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-        body:    JSON.stringify({ userId, email, contactNumber }),
-      });
-
-      const otpData = await res.json();
-
-      if (!res.ok) {
-        if (otpData.locked) {
-          navigate('/otp-verify', {
-            state: {
-              userId, email, password, contactNumber,
-              locked: true, lockedUntil: otpData.lockedUntil,
-            },
-          });
-        } else {
-          toast({ title: 'Failed to send OTP', description: otpData.error, variant: 'destructive' });
-          setIsLoading(false);
-        }
+      if (!userProfile) {
+        toast({ title: 'Login failed', description: 'Could not load user profile.', variant: 'destructive' });
+        await supabase.auth.signOut();
+        setIsLoading(false);
         return;
       }
 
-      toast({ title: 'OTP Sent', description: otpData.message });
-
-      navigate('/otp-verify', {
-        state: { userId, email, password, contactNumber, expiresAt: otpData.expiresAt },
-      });
+      navigate(getRedirectPath(userProfile.role));
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -170,11 +140,10 @@ const Login = () => {
                 disabled={isLoading}
               >
                 {isLoading
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Sending OTP...</>
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Signing in...</>
                   : 'Sign In'}
               </Button>
 
-              {/* Sign Up link */}
               <p className="text-center text-sm text-muted-foreground pt-2">
                 Don't have an account?{' '}
                 <Link

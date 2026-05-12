@@ -68,11 +68,13 @@ const App = () => (
         <AuthProvider>
           <Routes>
             {/* ── Public ──────────────────────────────────────────────── */}
-            <Route path="/"                element={<Login />} />
-            <Route path="/login"           element={<Navigate to="/" replace />} />
-            <Route path="/signup"          element={<Signup />} />
-            <Route path="/verify-student"  element={<VerifyStudent />} />
-            <Route path="/otp-verify"      element={<OtpVerification />} />
+            <Route path="/"               element={<Login />} />
+            <Route path="/login"          element={<Navigate to="/" replace />} />
+            <Route path="/signup"         element={<Signup />} />
+            <Route path="/verify-student" element={<VerifyStudent />} />
+
+            {/* OTP verification is only used after signup (email OTP) */}
+            <Route path="/otp-verify"     element={<OtpVerification />} />
 
             <Route element={<Layout />}>
 

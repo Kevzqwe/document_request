@@ -1,42 +1,36 @@
 import { useState } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { useNavigate, Link } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { Lock, Mail, Eye, EyeOff, Loader2, User, Phone } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
+import { supabase } from '@/integrations/supabase/client';
 
 const Signup = () => {
-  const [formData, setFormData] = useState({
-    firstName:    '',
-    lastName:     '',
-    email:        '',
-    contactNumber:'',
-    password:     '',
-    confirmPassword: '',
-  });
-  const [showPassword, setShowPassword]        = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [isLoading, setIsLoading]              = useState(false);
+  const [firstName, setFirstName]         = useState('');
+  const [lastName, setLastName]           = useState('');
+  const [email, setEmail]                 = useState('');
+  const [contactNumber, setContactNumber] = useState('');
+  const [password, setPassword]           = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword]   = useState(false);
+  const [showConfirm, setShowConfirm]     = useState(false);
+  const [isLoading, setIsLoading]         = useState(false);
 
   const navigate  = useNavigate();
   const { toast } = useToast();
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (formData.password !== formData.confirmPassword) {
+    if (password !== confirmPassword) {
       toast({ title: 'Passwords do not match', variant: 'destructive' });
       return;
     }
-
-    if (formData.password.length < 8) {
+    if (password.length < 8) {
       toast({ title: 'Password too short', description: 'Password must be at least 8 characters.', variant: 'destructive' });
       return;
     }
@@ -44,16 +38,65 @@ const Signup = () => {
     setIsLoading(true);
 
     try {
-      // Navigate to the student verification page, carrying the form data forward
-      navigate('/verify-student', {
-        state: {
-          firstName:     formData.firstName,
-          lastName:      formData.lastName,
-          email:         formData.email,
-          contactNumber: formData.contactNumber,
-          password:      formData.password,
+      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+      // 1. Create the Supabase auth user (email_confirm: false — we handle it ourselves)
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            role: 'student',
+            first_name: firstName,
+            last_name: lastName,
+            contact_number: contactNumber,
+          },
         },
       });
+
+      if (error) {
+        toast({ title: 'Signup failed', description: error.message, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      const userId = data.user?.id;
+      if (!userId) {
+        toast({ title: 'Signup failed', description: 'Could not create account.', variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      // Sign out immediately — the user must verify via OTP first
+      await supabase.auth.signOut();
+
+      // 2. Send email OTP (pass email only, no contactNumber — backend will send via email)
+      const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
+        body:    JSON.stringify({ userId, email, channel: 'email' }),
+      });
+
+      const otpData = await res.json();
+
+      if (!res.ok) {
+        toast({ title: 'Failed to send verification email', description: otpData.error, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      toast({ title: 'Check your email', description: 'A verification code has been sent to your email.' });
+
+      navigate('/otp-verify', {
+        state: {
+          userId,
+          email,
+          password,
+          expiresAt: otpData.expiresAt,
+        },
+      });
+
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
       setIsLoading(false);
@@ -76,23 +119,20 @@ const Signup = () => {
           </div>
         </div>
 
-        {/* Right — Sign Up form */}
+        {/* Right — Signup form */}
         <Card className="w-full shadow-2xl border-2">
-          <CardHeader className="space-y-4 pb-4">
+          <CardHeader className="space-y-4 pb-6">
             <div className="flex justify-center lg:hidden">
-              <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center p-2 shadow-lg">
+              <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center p-2 shadow-lg">
                 <img src={pcsLogo} alt="PCS Logo" className="w-full h-full object-contain" />
               </div>
             </div>
             <CardTitle className="text-3xl text-center">Create Account</CardTitle>
-            <p className="text-center text-muted-foreground text-sm">
-              Fill in your details to get started
-            </p>
+            <p className="text-center text-muted-foreground">Fill in your details to get started</p>
           </CardHeader>
 
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
-
               {/* Name row */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
@@ -101,11 +141,9 @@ const Signup = () => {
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       id="firstName"
-                      name="firstName"
-                      type="text"
-                      value={formData.firstName}
-                      onChange={handleChange}
-                      className="pl-9 h-11 text-sm"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      className="pl-9 h-12 text-base"
                       placeholder="First name"
                       required
                     />
@@ -117,11 +155,9 @@ const Signup = () => {
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       id="lastName"
-                      name="lastName"
-                      type="text"
-                      value={formData.lastName}
-                      onChange={handleChange}
-                      className="pl-9 h-11 text-sm"
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      className="pl-9 h-12 text-base"
                       placeholder="Last name"
                       required
                     />
@@ -133,14 +169,13 @@ const Signup = () => {
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                   <Input
                     id="email"
-                    name="email"
                     type="email"
-                    value={formData.email}
-                    onChange={handleChange}
-                    className="pl-10 h-11 text-sm"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="pl-10 h-12 text-base"
                     placeholder="Enter your email"
                     required
                   />
@@ -151,14 +186,13 @@ const Signup = () => {
               <div className="space-y-2">
                 <Label htmlFor="contactNumber">Contact Number</Label>
                 <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                   <Input
                     id="contactNumber"
-                    name="contactNumber"
                     type="tel"
-                    value={formData.contactNumber}
-                    onChange={handleChange}
-                    className="pl-10 h-11 text-sm"
+                    value={contactNumber}
+                    onChange={(e) => setContactNumber(e.target.value)}
+                    className="pl-10 h-12 text-base"
                     placeholder="+63 9XX XXX XXXX"
                     required
                   />
@@ -169,15 +203,14 @@ const Signup = () => {
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                   <Input
                     id="password"
-                    name="password"
                     type={showPassword ? 'text' : 'password'}
-                    value={formData.password}
-                    onChange={handleChange}
-                    className="pl-10 pr-10 h-11 text-sm"
-                    placeholder="At least 8 characters"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="pl-10 pr-10 h-12 text-base"
+                    placeholder="Enter your password"
                     required
                   />
                   <button
@@ -185,7 +218,7 @@ const Signup = () => {
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
               </div>
@@ -194,43 +227,39 @@ const Signup = () => {
               <div className="space-y-2">
                 <Label htmlFor="confirmPassword">Confirm Password</Label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
                   <Input
                     id="confirmPassword"
-                    name="confirmPassword"
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    value={formData.confirmPassword}
-                    onChange={handleChange}
-                    className="pl-10 pr-10 h-11 text-sm"
+                    type={showConfirm ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="pl-10 pr-10 h-12 text-base"
                     placeholder="Re-enter your password"
                     required
                   />
                   <button
                     type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    onClick={() => setShowConfirm(!showConfirm)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {showConfirm ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
               </div>
 
               <Button
                 type="submit"
-                className="w-full h-12 text-base font-semibold mt-2"
+                className="w-full h-12 text-base font-semibold"
                 disabled={isLoading}
               >
                 {isLoading
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Please wait...</>
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Creating account...</>
                   : 'Continue'}
               </Button>
 
-              <p className="text-center text-sm text-muted-foreground pt-1">
+              <p className="text-center text-sm text-muted-foreground pt-2">
                 Already have an account?{' '}
-                <Link
-                  to="/login"
-                  className="font-semibold text-primary hover:underline transition-colors"
-                >
+                <Link to="/" className="font-semibold text-primary hover:underline transition-colors">
                   Sign in
                 </Link>
               </p>
