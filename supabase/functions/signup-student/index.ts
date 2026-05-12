@@ -57,16 +57,38 @@ Deno.serve(async (req) => {
     try { body = await req.json(); }
     catch { return respond({ error: 'Invalid JSON body' }, 400); }
 
+    // ── Account fields ────────────────────────────────────────────────────
     const email          = toStr(body.email).toLowerCase();
     const password       = toStr(body.password);
     const first_name     = toStr(body.first_name);
     const last_name      = toStr(body.last_name);
     const contact_number = toStr(body.contact_number);
 
-    if (!email)          return respond({ error: 'email is required' }, 400);
-    if (!password)       return respond({ error: 'password is required' }, 400);
-    if (!first_name)     return respond({ error: 'first_name is required' }, 400);
-    if (!last_name)      return respond({ error: 'last_name is required' }, 400);
+    // ── Student verification fields (sent from VerifyStudent.tsx) ─────────
+    // student_type    : 'current' | 'alumni'  — decides which table to write
+    // student_id      : school-issued text ID  — students.student_id / alumni.student_id
+    // year_level      : e.g. "Grade 11"        — students.grade_level  (current only)
+    // section         : e.g. "St. Thomas"      — students.section      (current only)
+    // graduation_year : e.g. "2023"            — alumni.graduation_year (alumni only)
+    const student_type    = toStr(body.student_type);
+    const student_id      = toStr(body.student_id);
+    const year_level      = toStr(body.year_level);
+    const section         = toStr(body.section);
+    const graduation_year = toStr(body.graduation_year);
+
+    // ── Validation ────────────────────────────────────────────────────────
+    if (!email)        return respond({ error: 'email is required' }, 400);
+    if (!password)     return respond({ error: 'password is required' }, 400);
+    if (!first_name)   return respond({ error: 'first_name is required' }, 400);
+    if (!last_name)    return respond({ error: 'last_name is required' }, 400);
+    if (!student_type) return respond({ error: 'student_type is required' }, 400);
+    if (student_type !== 'current' && student_type !== 'alumni') {
+      return respond({ error: 'student_type must be "current" or "alumni"' }, 400);
+    }
+
+    console.log('signup-student called →', {
+      email, student_type, student_id, year_level, section, graduation_year,
+    });
 
     // ── Check for duplicate email ─────────────────────────────────────────
     const { data: existingList } = await supabase.auth.admin.listUsers({ perPage: 1000 });
@@ -74,17 +96,15 @@ Deno.serve(async (req) => {
       (u) => u.email?.toLowerCase() === email
     );
     if (alreadyExists) {
-      return respond({
-        error: `An account with this email already exists.`,
-      }, 400);
+      return respond({ error: 'An account with this email already exists.' }, 400);
     }
 
-    // ── Create auth user with email_confirm: true (service role bypasses ──
-    // ── email confirmation so signInWithPassword works immediately)       ──
+    // ── Create auth user ──────────────────────────────────────────────────
+    // email_confirm: true → lets signInWithPassword work immediately after OTP
     const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true,          // ✅ KEY: avoids "Email not confirmed" 400
+      email_confirm: true,
       user_metadata: {
         role:           'student',
         first_name,
@@ -102,41 +122,110 @@ Deno.serve(async (req) => {
     console.log('Auth user created:', userId);
 
     // ── Ensure user_roles row exists ──────────────────────────────────────
-    await supabase
+    const { error: roleErr } = await supabase
       .from('user_roles')
       .upsert({ user_id: userId, role: 'student' }, { onConflict: 'user_id' });
+    if (roleErr) console.error('user_roles upsert error:', roleErr.message);
 
-    // ── Wait for DB trigger to create the students row ────────────────────
+    // ── Wait for DB trigger to fire ───────────────────────────────────────
     await new Promise((r) => setTimeout(r, 600));
 
-    const { data: existingStudent } = await supabase
-      .from('students')
-      .select('student_id')
-      .eq('user_id', userId)
-      .single();
-
-    if (!existingStudent) {
-      await supabase.from('students').insert({
+    // ── Route: current student → students table ───────────────────────────
+    if (student_type === 'current') {
+      // Exact column names from schema:
+      //   user_id, username, first_name, last_name, contact_number,
+      //   student_id (text — school-issued), grade_level, section
+      // DO NOT touch student_number — it is GENERATED ALWAYS AS IDENTITY
+      const studentRecord: Record<string, any> = {
         user_id:        userId,
         username:       email,
         first_name,
         last_name,
         contact_number: contact_number || null,
-      });
+        student_id:     student_id     || null,  // text, school-issued ID
+        grade_level:    year_level     || null,  // e.g. "Grade 11"
+        section:        section        || null,  // e.g. "St. Thomas"
+      };
+
+      console.log('Saving to students:', JSON.stringify(studentRecord));
+
+      // Check if trigger already created the row
+      const { data: existingRow } = await supabase
+        .from('students')
+        .select('id')
+        .eq('user_id', userId)
+        .single();
+
+      if (existingRow) {
+        // Row exists — UPDATE with the verification fields
+        const { error: updateErr } = await supabase
+          .from('students')
+          .update(studentRecord)
+          .eq('user_id', userId);
+        if (updateErr) console.error('students UPDATE error:', updateErr.message);
+        else           console.log('students row updated ✓');
+      } else {
+        // No trigger row yet — INSERT fresh
+        const { error: insertErr } = await supabase
+          .from('students')
+          .insert(studentRecord);
+        if (insertErr) console.error('students INSERT error:', insertErr.message);
+        else           console.log('students row inserted ✓');
+      }
+
+    // ── Route: alumni → alumni table ──────────────────────────────────────
+    } else {
+      // Exact column names from alumni table:
+      //   user_id, username, first_name, last_name, contact_number,
+      //   student_id (text — school-issued), graduation_year (integer)
+      const alumniRecord: Record<string, any> = {
+        user_id:         userId,
+        username:        email,
+        first_name,
+        last_name,
+        contact_number:  contact_number  || null,
+        student_id:      student_id      || null,
+        graduation_year: graduation_year
+          ? parseInt(graduation_year, 10)
+          : null,
+      };
+
+      console.log('Saving to alumni:', JSON.stringify(alumniRecord));
+
+      const { data: existingRow } = await supabase
+        .from('alumni')
+        .select('id')
+        .eq('user_id', userId)
+        .single();
+
+      if (existingRow) {
+        const { error: updateErr } = await supabase
+          .from('alumni')
+          .update(alumniRecord)
+          .eq('user_id', userId);
+        if (updateErr) console.error('alumni UPDATE error:', updateErr.message);
+        else           console.log('alumni row updated ✓');
+      } else {
+        const { error: insertErr } = await supabase
+          .from('alumni')
+          .insert(alumniRecord);
+        if (insertErr) console.error('alumni INSERT error:', insertErr.message);
+        else           console.log('alumni row inserted ✓');
+      }
     }
 
-    // ── Generate OTP and save to DB ───────────────────────────────────────
+    // ── Generate OTP and save to otp_codes ───────────────────────────────
     const otp       = generateOtp();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    // Invalidate any previous OTPs
+    // Invalidate any previous unused OTPs for this user
     await supabase
       .from('otp_codes')
       .update({ is_used: true })
       .eq('user_id', userId)
       .eq('is_used', false);
 
-    const { data: otpRecord, error: otpInsertError } = await supabase
+    const { error: otpInsertError } = await supabase
       .from('otp_codes')
       .insert({
         user_id:    userId,
@@ -145,16 +234,14 @@ Deno.serve(async (req) => {
         expires_at: expiresAt.toISOString(),
         is_used:    false,
         attempts:   0,
-      })
-      .select('id')
-      .single();
+      });
 
     if (otpInsertError) {
       console.error('OTP insert error:', otpInsertError.message);
       return respond({ error: 'Account created but failed to generate OTP.' }, 500);
     }
 
-    // ── Send OTP via email ────────────────────────────────────────────────
+    // ── Send OTP via Gmail ────────────────────────────────────────────────
     const gmailUser     = Deno.env.get('GMAIL_USER');
     const gmailPassword = Deno.env.get('GMAIL_APP_PASSWORD');
 
@@ -194,6 +281,8 @@ Deno.serve(async (req) => {
       } catch (emailErr: any) {
         console.error('Email send error (non-critical):', emailErr.message);
       }
+    } else {
+      console.warn('Gmail env vars not set — skipping email');
     }
 
     return respond({
@@ -204,7 +293,7 @@ Deno.serve(async (req) => {
     });
 
   } catch (err: any) {
-    console.error('signup-student error:', err);
+    console.error('signup-student unhandled error:', err);
     return respond({ error: err.message || 'Internal server error' }, 500);
   }
 });

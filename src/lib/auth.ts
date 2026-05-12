@@ -13,7 +13,7 @@ export interface UserProfile {
   section: string | null;
   avatarUrl: string | null;
   studentId: string | null;
-  role: 'student' | 'admin' | 'cashier' | 'programhead';
+  role: 'student' | 'alumni' | 'admin' | 'cashier' | 'programhead';
 }
 
 export interface AuthUser {
@@ -26,14 +26,15 @@ export interface AuthSession {
   profile: UserProfile;
 }
 
-// Fetch user profile — queries all 4 role tables in parallel.
+// Fetch user profile — queries all 5 role tables in parallel.
 // No longer touches user_roles table (was causing 406 errors).
 export async function fetchUserProfile(userId: string): Promise<UserProfile | null> {
-  const [adminRes, cashierRes, programheadRes, studentRes] = await Promise.all([
+  const [adminRes, cashierRes, programheadRes, studentRes, alumniRes] = await Promise.all([
     supabase.from('admins').select('*').eq('user_id', userId).maybeSingle(),
     supabase.from('cashiers').select('*').eq('user_id', userId).maybeSingle(),
     supabase.from('programheads').select('*').eq('user_id', userId).maybeSingle(),
     supabase.from('students').select('*').eq('user_id', userId).maybeSingle(),
+    supabase.from('alumni').select('*').eq('user_id', userId).maybeSingle(),
   ]);
 
   if (adminRes.data) {
@@ -108,6 +109,24 @@ export async function fetchUserProfile(userId: string): Promise<UserProfile | nu
     };
   }
 
+  if (alumniRes.data) {
+    const d = alumniRes.data;
+    return {
+      id:            d.id,
+      user_id:       d.user_id,
+      username:      d.username,
+      firstName:     d.first_name,
+      lastName:      d.last_name,
+      middleName:    d.middle_name ?? null,
+      contactNumber: d.contact_number,
+      gradeLevel:    null,
+      section:       null,
+      avatarUrl:     d.avatar_url ?? null,
+      studentId:     (d as any).student_id || null,
+      role:          'alumni',
+    };
+  }
+
   return null;
 }
 
@@ -118,6 +137,7 @@ export function getRedirectPath(role: UserProfile['role']): string {
     case 'cashier':     return '/admin/payments';
     case 'programhead': return '/admin/students';
     case 'student':     return '/student/dashboard';
+    case 'alumni':      return '/student/dashboard';
     default:            return '/';
   }
 }
