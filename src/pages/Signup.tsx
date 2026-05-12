@@ -7,18 +7,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 import { Lock, Mail, Eye, EyeOff, Loader2, User, Phone } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
-import { supabase } from '@/integrations/supabase/client';
 
 const Signup = () => {
-  const [firstName, setFirstName]         = useState('');
-  const [lastName, setLastName]           = useState('');
-  const [email, setEmail]                 = useState('');
-  const [contactNumber, setContactNumber] = useState('');
-  const [password, setPassword]           = useState('');
+  const [firstName, setFirstName]             = useState('');
+  const [lastName, setLastName]               = useState('');
+  const [email, setEmail]                     = useState('');
+  const [contactNumber, setContactNumber]     = useState('');
+  const [password, setPassword]               = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword]   = useState(false);
-  const [showConfirm, setShowConfirm]     = useState(false);
-  const [isLoading, setIsLoading]         = useState(false);
+  const [showPassword, setShowPassword]       = useState(false);
+  const [showConfirm, setShowConfirm]         = useState(false);
+  const [isLoading, setIsLoading]             = useState(false);
 
   const navigate  = useNavigate();
   const { toast } = useToast();
@@ -31,7 +30,11 @@ const Signup = () => {
       return;
     }
     if (password.length < 8) {
-      toast({ title: 'Password too short', description: 'Password must be at least 8 characters.', variant: 'destructive' });
+      toast({
+        title:       'Password too short',
+        description: 'Password must be at least 8 characters.',
+        variant:     'destructive',
+      });
       return;
     }
 
@@ -41,59 +44,44 @@ const Signup = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-      // 1. Create the Supabase auth user (email_confirm: false — we handle it ourselves)
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            role: 'student',
-            first_name: firstName,
-            last_name: lastName,
-            contact_number: contactNumber,
-          },
-        },
-      });
-
-      if (error) {
-        toast({ title: 'Signup failed', description: error.message, variant: 'destructive' });
-        setIsLoading(false);
-        return;
-      }
-
-      const userId = data.user?.id;
-      if (!userId) {
-        toast({ title: 'Signup failed', description: 'Could not create account.', variant: 'destructive' });
-        setIsLoading(false);
-        return;
-      }
-
-      // Sign out immediately — the user must verify via OTP first
-      await supabase.auth.signOut();
-
-      // 2. Send email OTP (pass email only, no contactNumber — backend will send via email)
-      const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
+      // ── Call signup-student edge function ─────────────────────────────
+      // Uses service role internally → creates user with email_confirm: true
+      // → sends OTP email → returns userId + expiresAt for the OTP page
+      const res = await fetch(`${supabaseUrl}/functions/v1/signup-student`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-        body:    JSON.stringify({ userId, email, channel: 'email' }),
-      });
-
-      const otpData = await res.json();
-
-      if (!res.ok) {
-        toast({ title: 'Failed to send verification email', description: otpData.error, variant: 'destructive' });
-        setIsLoading(false);
-        return;
-      }
-
-      toast({ title: 'Check your email', description: 'A verification code has been sent to your email.' });
-
-      navigate('/otp-verify', {
-        state: {
-          userId,
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey':        supabaseAnonKey,
+        },
+        body: JSON.stringify({
           email,
           password,
-          expiresAt: otpData.expiresAt,
+          first_name:      firstName,
+          last_name:       lastName,
+          contact_number:  contactNumber,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast({ title: 'Signup failed', description: data.error, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      toast({
+        title:       'Check your email',
+        description: 'A verification code has been sent to your email address.',
+      });
+
+      // Navigate to OTP page — pass password so OtpVerification can sign in after verify
+      navigate('/otp-verify', {
+        state: {
+          userId:    data.userId,
+          email,
+          password,
+          expiresAt: data.expiresAt,
         },
       });
 
@@ -133,6 +121,7 @@ const Signup = () => {
 
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
+
               {/* Name row */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
@@ -194,7 +183,6 @@ const Signup = () => {
                     onChange={(e) => setContactNumber(e.target.value)}
                     className="pl-10 h-12 text-base"
                     placeholder="+63 9XX XXX XXXX"
-                    required
                   />
                 </div>
               </div>
@@ -210,7 +198,7 @@ const Signup = () => {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10 pr-10 h-12 text-base"
-                    placeholder="Enter your password"
+                    placeholder="Min. 8 characters"
                     required
                   />
                   <button

@@ -24,12 +24,10 @@ const LOCK_DURATION = 5 * 60000; // 5 minutes
 Deno.serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
-  // Always handle OPTIONS preflight first
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // Only allow POST
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
@@ -43,7 +41,11 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl    = Deno.env.get('SUPABASE_URL')!;
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase       = createClient(supabaseUrl, serviceRoleKey);
+
+    // Service role required for auth.admin.updateUserById
+    const supabase = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
 
     const { userId, otpCode } = await req.json();
 
@@ -72,8 +74,8 @@ Deno.serve(async (req) => {
         const remainingMs   = lockedUntil.getTime() - Date.now();
         const remainingMins = Math.ceil(remainingMs / 60000);
         return respond({
-          error:      `Account locked. Too many failed attempts. Try again in ${remainingMins} minute(s).`,
-          locked:     true,
+          error:       `Account locked. Too many failed attempts. Try again in ${remainingMins} minute(s).`,
+          locked:      true,
           lockedUntil: otpRecord.locked_until,
         }, 429);
       }
@@ -88,7 +90,7 @@ Deno.serve(async (req) => {
       return respond({ error: 'OTP has expired. Please request a new one.' }, 400);
     }
 
-    // ── Verify OTP ────────────────────────────────────────────────────────
+    // ── Verify OTP code ───────────────────────────────────────────────────
     if (otpRecord.otp_code !== otpCode.trim()) {
       const newAttempts = (otpRecord.attempts || 0) + 1;
       const remaining   = MAX_ATTEMPTS - newAttempts;
@@ -101,8 +103,8 @@ Deno.serve(async (req) => {
           .eq('id', otpRecord.id);
 
         return respond({
-          error:      'Too many failed attempts. Your account is locked for 5 minutes.',
-          locked:     true,
+          error:       'Too many failed attempts. Your account is locked for 5 minutes.',
+          locked:      true,
           lockedUntil,
         }, 429);
       }
@@ -125,7 +127,21 @@ Deno.serve(async (req) => {
       .update({ is_used: true })
       .eq('id', otpRecord.id);
 
-    console.log('OTP verified successfully for user:', userId);
+    // ── Confirm the user's email so signInWithPassword works ─────────────
+    // ✅ Correct method: updateUserById (not updateUser)
+    const { error: confirmError } = await supabase.auth.admin.updateUserById(
+      userId,
+      { email_confirm: true }
+    );
+
+    if (confirmError) {
+      console.error('Email confirmation error:', confirmError.message);
+      return respond({
+        error: `OTP verified but failed to activate account: ${confirmError.message}`,
+      }, 500);
+    }
+
+    console.log('OTP verified and email confirmed for user:', userId);
 
     return respond({ success: true, message: 'OTP verified successfully.' });
 

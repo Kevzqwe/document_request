@@ -3,9 +3,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/contexts/AuthContext';
 import { Loader2, Mail, RefreshCw, ShieldAlert } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
-import { supabase } from '@/integrations/supabase/client';
 
 const OTP_LENGTH = 6;
 
@@ -13,6 +13,7 @@ const OtpVerification = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { login } = useAuth();
 
   // State passed from Signup page
   const {
@@ -21,9 +22,9 @@ const OtpVerification = () => {
     password,
     expiresAt: initialExpiresAt,
   } = (location.state as {
-    userId: string;
-    email: string;
-    password: string;
+    userId:     string;
+    email:      string;
+    password:   string;
     expiresAt?: string;
   }) || {};
 
@@ -102,10 +103,10 @@ const OtpVerification = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+      // ── Step 1: Verify the OTP code ───────────────────────────────────
       const res = await fetch(`${supabaseUrl}/functions/v1/verify-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-        // ✅ Matches backend field name: otpCode
         body:    JSON.stringify({ userId, otpCode: code }),
       });
 
@@ -113,12 +114,10 @@ const OtpVerification = () => {
 
       if (!res.ok) {
         if (data.locked) {
-          // Account locked — show lock state, let user resend to unlock
           setIsLocked(true);
           setAttemptsLeft(0);
           toast({ title: 'Account Locked', description: data.error, variant: 'destructive' });
         } else {
-          // Wrong code — show remaining attempts
           if (typeof data.remaining === 'number') setAttemptsLeft(data.remaining);
           toast({
             title:       'Incorrect Code',
@@ -132,16 +131,19 @@ const OtpVerification = () => {
         return;
       }
 
-      // ✅ OTP correct — sign the user in
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      if (signInError) {
-        toast({ title: 'Sign-in failed', description: signInError.message, variant: 'destructive' });
+      // ── Step 2: OTP correct — sign in via AuthContext.login() ─────────
+      // login() calls signInWithPassword + hydrateUserFromSession + navigate
+      // The user was created with email_confirm:true so this will not 400.
+      const { error: loginError } = await login(email, password);
+
+      if (loginError) {
+        toast({ title: 'Sign-in failed', description: loginError, variant: 'destructive' });
         setIsVerifying(false);
         return;
       }
 
       toast({ title: 'Email verified!', description: 'Welcome to PCS Document Request System.' });
-      navigate('/student/dashboard', { replace: true });
+      // AuthContext.login() already calls navigate() — no need to navigate here
 
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -155,7 +157,7 @@ const OtpVerification = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-      // No contactNumber → backend will skip SMS and only send email
+      // send-otp without contactNumber → email-only path
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
@@ -168,7 +170,6 @@ const OtpVerification = () => {
         toast({ title: 'Failed to resend', description: data.error, variant: 'destructive' });
       } else {
         toast({ title: 'Code Resent', description: 'A new verification code has been sent to your email.' });
-        // Reset everything for a fresh attempt
         setOtp(Array(OTP_LENGTH).fill(''));
         setAttemptsLeft(null);
         setIsLocked(false);
@@ -226,6 +227,7 @@ const OtpVerification = () => {
           </CardHeader>
 
           <CardContent className="space-y-6">
+
             {/* OTP inputs */}
             <div
               className={`flex gap-2 justify-center transition-opacity ${(isLocked || isExpired) ? 'opacity-40 pointer-events-none' : ''}`}
@@ -295,6 +297,7 @@ const OtpVerification = () => {
                   : <><RefreshCw className="w-4 h-4 mr-2" />Resend Code</>}
               </Button>
             </div>
+
           </CardContent>
         </Card>
       </div>
