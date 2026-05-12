@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Lock, Mail, Eye, EyeOff, Loader2, User, Phone } from 'lucide-react';
+import { Lock, Mail, Eye, EyeOff, User, Phone } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
 
 const Signup = () => {
@@ -17,12 +17,11 @@ const Signup = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword]       = useState(false);
   const [showConfirm, setShowConfirm]         = useState(false);
-  const [isLoading, setIsLoading]             = useState(false);
 
   const navigate  = useNavigate();
   const { toast } = useToast();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     if (password !== confirmPassword) {
@@ -38,57 +37,16 @@ const Signup = () => {
       return;
     }
 
-    setIsLoading(true);
-
-    try {
-      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-
-      // ── Call signup-student edge function ─────────────────────────────
-      // Uses service role internally → creates user with email_confirm: true
-      // → sends OTP email → returns userId + expiresAt for the OTP page
-      const res = await fetch(`${supabaseUrl}/functions/v1/signup-student`, {
-        method:  'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey':        supabaseAnonKey,
-        },
-        body: JSON.stringify({
-          email,
-          password,
-          first_name:      firstName,
-          last_name:       lastName,
-          contact_number:  contactNumber,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        toast({ title: 'Signup failed', description: data.error, variant: 'destructive' });
-        setIsLoading(false);
-        return;
-      }
-
-      toast({
-        title:       'Check your email',
-        description: 'A verification code has been sent to your email address.',
-      });
-
-      // Navigate to OTP page — pass password so OtpVerification can sign in after verify
-      navigate('/otp-verify', {
-        state: {
-          userId:    data.userId,
-          email,
-          password,
-          expiresAt: data.expiresAt,
-        },
-      });
-
-    } catch (err: any) {
-      toast({ title: 'Error', description: err.message, variant: 'destructive' });
-      setIsLoading(false);
-    }
+    // Pass credentials to VerifyStudent — API call happens there
+    navigate('/verify-student', {
+      state: {
+        firstName,
+        lastName,
+        email,
+        contactNumber,
+        password,
+      },
+    });
   };
 
   return (
@@ -117,6 +75,24 @@ const Signup = () => {
             </div>
             <CardTitle className="text-3xl text-center">Create Account</CardTitle>
             <p className="text-center text-muted-foreground">Fill in your details to get started</p>
+
+            {/* Step indicator */}
+            <div className="flex items-center justify-center gap-2 pt-1">
+              <div className="flex items-center gap-1.5">
+                <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-semibold">1</div>
+                <span className="text-xs font-medium text-primary">Account</span>
+              </div>
+              <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              <div className="flex items-center gap-1.5">
+                <div className="w-6 h-6 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-xs font-semibold">2</div>
+                <span className="text-xs text-muted-foreground">Verification</span>
+              </div>
+              <svg className="w-4 h-4 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+              <div className="flex items-center gap-1.5">
+                <div className="w-6 h-6 rounded-full bg-muted text-muted-foreground flex items-center justify-center text-xs font-semibold">3</div>
+                <span className="text-xs text-muted-foreground">OTP</span>
+              </div>
+            </div>
           </CardHeader>
 
           <CardContent>
@@ -238,11 +214,8 @@ const Signup = () => {
               <Button
                 type="submit"
                 className="w-full h-12 text-base font-semibold"
-                disabled={isLoading}
               >
-                {isLoading
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Creating account...</>
-                  : 'Continue'}
+                Continue
               </Button>
 
               <p className="text-center text-sm text-muted-foreground pt-2">

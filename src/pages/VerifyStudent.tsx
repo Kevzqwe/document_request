@@ -10,6 +10,14 @@ import pcsLogo from '@/assets/PCSlogo.png';
 
 type StudentType = 'alumni' | 'current' | null;
 
+interface SignupState {
+  firstName:     string;
+  lastName:      string;
+  email:         string;
+  contactNumber: string;
+  password:      string;
+}
+
 const VerifyStudent = () => {
   const [studentType, setStudentType]       = useState<StudentType>(null);
   const [studentId, setStudentId]           = useState('');
@@ -22,17 +30,10 @@ const VerifyStudent = () => {
   const location  = useLocation();
   const { toast } = useToast();
 
-  // Data passed from the Sign Up page
-  const signupData = location.state as {
-    firstName: string;
-    lastName: string;
-    email: string;
-    contactNumber: string;
-    password: string;
-  } | null;
+  // Data passed from Signup page
+  const signupData = location.state as SignupState | null;
 
   // Guard: redirect if arrived without sign-up data
-  // Must be in useEffect — calling navigate() during render is not allowed
   useEffect(() => {
     if (!signupData) {
       navigate('/signup', { replace: true });
@@ -43,26 +44,67 @@ const VerifyStudent = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!studentType) {
       toast({ title: 'Please select your student type', variant: 'destructive' });
       return;
     }
+
     setIsLoading(true);
 
     try {
-      const payload = {
-        ...signupData,
-        studentType,
-        studentId,
-        ...(studentType === 'alumni'  ? { graduationYear } : {}),
-        ...(studentType === 'current' ? { yearLevel, section } : {}),
-      };
+      const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-      // TODO: replace with your Supabase registration + OTP call
-      navigate('/otp-verify', { state: payload });
+      const res = await fetch(`${supabaseUrl}/functions/v1/signup-student`, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey':        supabaseAnonKey,
+        },
+        body: JSON.stringify({
+          email:          signupData.email,
+          password:       signupData.password,
+          first_name:     signupData.firstName,
+          last_name:      signupData.lastName,
+          contact_number: signupData.contactNumber,
+          // Student verification fields
+          student_type:   studentType,
+          student_id:     studentId,
+          ...(studentType === 'alumni'
+            ? { graduation_year: graduationYear }
+            : {}),
+          ...(studentType === 'current'
+            ? { year_level: yearLevel, section }
+            : {}),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast({ title: 'Signup failed', description: data.error, variant: 'destructive' });
+        setIsLoading(false);
+        return;
+      }
+
+      toast({
+        title:       'Check your email',
+        description: 'A verification code has been sent to your email address.',
+      });
+
+      // Navigate to OTP page — pass password so OtpVerification can sign in after verify
+      navigate('/otp-verify', {
+        state: {
+          userId:    data.userId,
+          email:     signupData.email,
+          password:  signupData.password,
+          expiresAt: data.expiresAt,
+        },
+      });
+
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
-    } finally {
       setIsLoading(false);
     }
   };
@@ -264,13 +306,14 @@ const VerifyStudent = () => {
                 disabled={isLoading || !studentType}
               >
                 {isLoading
-                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying…</>
+                  ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Submitting…</>
                   : 'Submit & Continue'}
               </Button>
 
               {/* Back link */}
               <Link
                 to="/signup"
+                state={signupData}
                 className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
                 <ArrowLeft className="w-4 h-4" />
