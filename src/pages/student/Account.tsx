@@ -26,14 +26,13 @@ const Account = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  // ── Contact number error modal ────────────────────────────────────────────
   const [contactErrorOpen,    setContactErrorOpen]    = useState(false);
   const [contactErrorMessage, setContactErrorMessage] = useState('');
 
   const [editedInfo, setEditedInfo] = useState({
-    firstName: profile?.firstName || '',
-    middleName: profile?.middleName || '',
-    lastName: profile?.lastName || '',
+    firstName:     profile?.firstName     || '',
+    middleName:    profile?.middleName    || '',
+    lastName:      profile?.lastName      || '',
     contactNumber: profile?.contactNumber || '',
   });
 
@@ -82,13 +81,20 @@ const Account = () => {
     try {
       const newAvatarUrl = await profileStorage.uploadAvatar(user.id, file);
       setAvatarUrl(newAvatarUrl);
-      await supabase.from('students').update({ avatar_url: newAvatarUrl }).eq('user_id', user.id);
+
+      // ── Update avatar in the correct table ───────────────────────────
+      if (profile?.role === 'alumni') {
+        await supabase.from('alumni').update({ avatar_url: newAvatarUrl }).eq('user_id', user.id);
+      } else {
+        await supabase.from('students').update({ avatar_url: newAvatarUrl }).eq('user_id', user.id);
+      }
+
       profileStorage.save({
-        userId: user.id,
-        avatarUrl: newAvatarUrl,
-        firstName: editedInfo.firstName,
-        lastName: editedInfo.lastName,
-        middleName: editedInfo.middleName,
+        userId:        user.id,
+        avatarUrl:     newAvatarUrl,
+        firstName:     editedInfo.firstName,
+        lastName:      editedInfo.lastName,
+        middleName:    editedInfo.middleName,
         contactNumber: editedInfo.contactNumber,
       });
       await refreshProfile();
@@ -107,7 +113,6 @@ const Account = () => {
     // ── Normalize & validate contact number ──────────────────────────────
     let contact = editedInfo.contactNumber || '';
     if (contact) {
-      // Auto-fix: "9xxxxxxxxx" (10 digits) → "09xxxxxxxxx"
       if (contact.startsWith('9') && contact.length === 10) contact = '0' + contact;
       if (contact.length !== 11) {
         setContactErrorMessage('Failed to save: number must be 11 digits.');
@@ -130,9 +135,12 @@ const Account = () => {
 
     setIsSaving(true);
 
-    // Update profile in database
+    // ── Update the correct table based on role ───────────────────────────
+    const isAlumni = profile?.role === 'alumni';
+    const table    = isAlumni ? 'alumni' : 'students';
+
     const { error } = await supabase
-      .from('students')
+      .from(table)
       .update({
         first_name:     editedInfo.firstName,
         middle_name:    editedInfo.middleName  || null,
@@ -142,7 +150,7 @@ const Account = () => {
       .eq('user_id', user.id);
 
     if (error) {
-      toast({ title: 'Error', description: 'Failed to update profile.', variant: 'destructive' });
+      toast({ title: 'Error', description: `Failed to update profile: ${error.message}`, variant: 'destructive' });
       setIsSaving(false);
       return;
     }
@@ -150,10 +158,9 @@ const Account = () => {
     // Sync normalized number back into form state
     setEditedInfo(prev => ({ ...prev, contactNumber: contact }));
 
-    // ✅ Update password with fresh session to avoid 400 error
+    // ── Update password ──────────────────────────────────────────────────
     if (newPassword) {
       try {
-        // Refresh session first to ensure token is valid
         const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
 
         if (refreshError || !refreshed?.session) {
@@ -179,7 +186,7 @@ const Account = () => {
     }
 
     profileStorage.save({
-      userId: user.id,
+      userId:        user.id,
       avatarUrl,
       firstName:     editedInfo.firstName,
       lastName:      editedInfo.lastName,
@@ -223,6 +230,8 @@ const Account = () => {
     setConfirmPassword('');
     setIsEditing(false);
   };
+
+  const isAlumni = profile?.role === 'alumni';
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -316,7 +325,6 @@ const Account = () => {
                 disabled={!isEditing}
                 onChange={(e) => setEditedInfo({
                   ...editedInfo,
-                  // ✅ Limit to 11 digits
                   contactNumber: e.target.value.replace(/[^0-9]/g, '').slice(0, 11),
                 })}
                 maxLength={11}
@@ -327,21 +335,33 @@ const Account = () => {
               <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Student ID</Label>
               <Input value={profile?.studentId || '—'} disabled className="bg-muted border-2 font-medium" />
             </div>
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2 text-muted-foreground"><GraduationCap className="w-4 h-4" />Grade Level</Label>
-              <Input value={profile?.gradeLevel || '—'} disabled className="bg-muted border-2 font-medium" />
-            </div>
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2 text-muted-foreground"><GraduationCap className="w-4 h-4" />Section</Label>
-              <Input value={profile?.section || '—'} disabled className="bg-muted border-2 font-medium" />
-            </div>
+
+            {/* ── Show grade/section for students, graduation year for alumni ── */}
+            {isAlumni ? (
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2 text-muted-foreground"><GraduationCap className="w-4 h-4" />Graduation Year</Label>
+                <Input value={(profile as any)?.graduationYear || '—'} disabled className="bg-muted border-2 font-medium" />
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2 text-muted-foreground"><GraduationCap className="w-4 h-4" />Grade Level</Label>
+                  <Input value={profile?.gradeLevel || '—'} disabled className="bg-muted border-2 font-medium" />
+                </div>
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-2 text-muted-foreground"><GraduationCap className="w-4 h-4" />Section</Label>
+                  <Input value={profile?.section || '—'} disabled className="bg-muted border-2 font-medium" />
+                </div>
+              </>
+            )}
+
             <div className="space-y-2">
               <Label className="flex items-center gap-2 text-muted-foreground"><User className="w-4 h-4" />Role</Label>
               <Input value={profile?.role || '—'} disabled className="bg-muted border-2 font-medium capitalize" />
             </div>
           </div>
 
-          {/* ✅ Password change - only shows when editing */}
+          {/* Password change - only shows when editing */}
           {isEditing && (
             <div className="border-t pt-6 space-y-4">
               <h3 className="font-semibold flex items-center gap-2">
@@ -418,7 +438,7 @@ const Account = () => {
         {isLoggingOut ? 'Logging out...' : 'Logout'}
       </Button>
 
-      {/* ── Contact Number Error Modal ─────────────────────────────────────── */}
+      {/* Contact Number Error Modal */}
       <AlertDialog open={contactErrorOpen} onOpenChange={setContactErrorOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

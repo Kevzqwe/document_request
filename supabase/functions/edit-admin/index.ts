@@ -41,42 +41,41 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Must be admin
+    // Must be admin or programhead
     const { data: roleData } = await supabaseAdmin
       .from('user_roles')
       .select('role')
       .eq('user_id', caller.id)
-      .eq('role', 'admin')
+      .in('role', ['admin', 'programhead'])
       .single();
 
     if (!roleData) {
-      return new Response(JSON.stringify({ error: 'Forbidden: admin only' }), {
+      return new Response(JSON.stringify({ error: 'Forbidden: admin or programhead only' }), {
         status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
     const body = await req.json();
-    const record_id      = toStr(body.record_id);
-    const account_type   = toStr(body.account_type);
-    const first_name     = toStr(body.first_name);
-    const last_name      = toStr(body.last_name);
-    const middle_name    = toStr(body.middle_name);
-    const contact_number = toStr(body.contact_number);
-    const admin_role     = toStr(body.admin_role);
 
-    if (!record_id)  return new Response(JSON.stringify({ error: 'record_id is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!first_name) return new Response(JSON.stringify({ error: 'first_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-    if (!last_name)  return new Response(JSON.stringify({ error: 'last_name is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    // student_type: 'current' | 'alumni' — decides which table to update
+    // If not provided, defaults to 'current' for backward compatibility
+    const student_type      = toStr(body.student_type) || 'current';
+    const student_id        = toStr(body.student_id);
+    const first_name        = toStr(body.first_name);
+    const last_name         = toStr(body.last_name);
+    const middle_name       = toStr(body.middle_name);
+    const contact_number    = toStr(body.contact_number);
+    const grade_level       = toStr(body.grade_level);
+    const section           = toStr(body.section);
+    const graduation_year   = toStr(body.graduation_year);
 
-    const TABLE_MAP: Record<string, string> = {
-      admin:       'admins',
-      cashier:     'cashiers',
-      programhead: 'programheads',
-    };
-
-    const table = TABLE_MAP[account_type];
-    if (!table) {
-      return new Response(JSON.stringify({ error: 'Invalid account_type. Must be admin, cashier, or programhead.' }), {
+    if (!student_id) {
+      return new Response(JSON.stringify({ error: 'student_id is required' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    if (!first_name || !last_name) {
+      return new Response(JSON.stringify({ error: 'first_name and last_name are required' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -92,32 +91,68 @@ Deno.serve(async (req) => {
       }
     }
 
-    const updatePayload: Record<string, any> = {
-      first_name,
-      last_name,
-      middle_name:    middle_name    || null,
-      contact_number: normalizedContact,
-    };
+    // ── Route: alumni ─────────────────────────────────────────────────────
+    if (student_type === 'alumni') {
+      const alumniPayload: Record<string, any> = {
+        first_name,
+        last_name,
+        middle_name:    middle_name  || null,
+        contact_number: normalizedContact,
+      };
 
-    if (account_type === 'admin' && admin_role) {
-      updatePayload.admin_role = admin_role;
+      // Only include graduation_year if provided and valid
+      if (graduation_year) {
+        const year = parseInt(graduation_year, 10);
+        if (isNaN(year) || year < 1950 || year > new Date().getFullYear()) {
+          return new Response(JSON.stringify({ error: 'Invalid graduation year' }), {
+            status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        alumniPayload.graduation_year = year;
+      }
+
+      const { error: alumniUpdateError } = await supabaseAdmin
+        .from('alumni')
+        .update(alumniPayload)
+        .eq('id', student_id);
+
+      if (alumniUpdateError) {
+        console.error('Alumni update error:', alumniUpdateError.message);
+        return new Response(JSON.stringify({ error: alumniUpdateError.message }), {
+          status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, message: 'Alumni updated successfully.' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
+    // ── Route: current student ────────────────────────────────────────────
     const { error: updateError } = await supabaseAdmin
-      .from(table)
-      .update(updatePayload)
-      .eq('id', record_id);
+      .from('students')
+      .update({
+        first_name,
+        last_name,
+        middle_name:    middle_name  || null,
+        contact_number: normalizedContact,
+        grade_level:    grade_level  || null,
+        section:        section      || null,
+      })
+      .eq('id', student_id);
 
     if (updateError) {
-      console.error('Admin update error:', updateError.message);
+      console.error('Student update error:', updateError.message);
       return new Response(JSON.stringify({ error: updateError.message }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    return new Response(JSON.stringify({ success: true, message: `${account_type} updated successfully.` }), {
-      status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ success: true, message: 'Student updated successfully.' }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
   } catch (err: any) {
     console.error('Unexpected error:', err);

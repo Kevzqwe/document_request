@@ -56,13 +56,17 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const student_id     = toStr(body.student_id);
-    const first_name     = toStr(body.first_name);
-    const last_name      = toStr(body.last_name);
-    const middle_name    = toStr(body.middle_name);
-    const contact_number = toStr(body.contact_number);
-    const grade_level    = toStr(body.grade_level);
-    const section        = toStr(body.section);
+
+    // student_type: 'alumni' | 'current' — decides which table to update
+    const student_type    = toStr(body.student_type) || 'current';
+    const student_id      = toStr(body.student_id);
+    const first_name      = toStr(body.first_name);
+    const last_name       = toStr(body.last_name);
+    const middle_name     = toStr(body.middle_name);
+    const contact_number  = toStr(body.contact_number);
+    const grade_level     = toStr(body.grade_level);
+    const section         = toStr(body.section);
+    const graduation_year = toStr(body.graduation_year);
 
     if (!student_id) {
       return new Response(JSON.stringify({ error: 'student_id is required' }), {
@@ -86,15 +90,57 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── Route: alumni ─────────────────────────────────────────────────────
+    if (student_type === 'alumni') {
+      const alumniPayload: Record<string, any> = {
+        first_name,
+        last_name,
+        middle_name:    middle_name || null,
+        contact_number: normalizedContact,
+      };
+
+      if (graduation_year) {
+        const year = parseInt(graduation_year, 10);
+        if (isNaN(year) || year < 1950 || year > new Date().getFullYear()) {
+          return new Response(JSON.stringify({ error: 'Invalid graduation year' }), {
+            status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        alumniPayload.graduation_year = year;
+      }
+
+      console.log('Updating alumni row with id:', student_id, alumniPayload);
+
+      const { error: alumniUpdateError } = await supabaseAdmin
+        .from('alumni')
+        .update(alumniPayload)
+        .eq('id', student_id);
+
+      if (alumniUpdateError) {
+        console.error('Alumni update error:', alumniUpdateError.message);
+        return new Response(JSON.stringify({ error: alumniUpdateError.message }), {
+          status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, message: 'Alumni updated successfully.' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ── Route: current student ────────────────────────────────────────────
+    console.log('Updating student row with id:', student_id);
+
     const { error: updateError } = await supabaseAdmin
       .from('students')
       .update({
         first_name,
         last_name,
-        middle_name:    middle_name    || null,
+        middle_name:    middle_name || null,
         contact_number: normalizedContact,
-        grade_level:    grade_level    || null,
-        section:        section        || null,
+        grade_level:    grade_level || null,
+        section:        section     || null,
       })
       .eq('id', student_id);
 
@@ -105,9 +151,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    return new Response(JSON.stringify({ success: true, message: 'Student updated successfully.' }), {
-      status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ success: true, message: 'Student updated successfully.' }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
   } catch (err: any) {
     console.error('Unexpected error:', err);
