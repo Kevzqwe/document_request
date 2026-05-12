@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Mail, RefreshCw } from 'lucide-react';
+import { Loader2, Mail, RefreshCw, ShieldAlert } from 'lucide-react';
 import pcsLogo from '@/assets/PCSlogo.png';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -19,7 +19,7 @@ const OtpVerification = () => {
     userId,
     email,
     password,
-    expiresAt,
+    expiresAt: initialExpiresAt,
   } = (location.state as {
     userId: string;
     email: string;
@@ -27,20 +27,28 @@ const OtpVerification = () => {
     expiresAt?: string;
   }) || {};
 
-  const [otp, setOtp]               = useState<string[]>(Array(OTP_LENGTH).fill(''));
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [isResending, setIsResending] = useState(false);
-  const [timeLeft, setTimeLeft]       = useState<number>(0);
+  const [otp, setOtp]                   = useState<string[]>(Array(OTP_LENGTH).fill(''));
+  const [isVerifying, setIsVerifying]   = useState(false);
+  const [isResending, setIsResending]   = useState(false);
+  const [timeLeft, setTimeLeft]         = useState<number>(0);
+  const [expiresAt, setExpiresAt]       = useState<string | undefined>(initialExpiresAt);
+  const [attemptsLeft, setAttemptsLeft] = useState<number | null>(null);
+  const [isLocked, setIsLocked]         = useState(false);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Redirect away if accessed directly without state
+  // Redirect if accessed directly without state
   useEffect(() => {
     if (!userId || !email) {
       navigate('/signup', { replace: true });
     }
   }, [userId, email, navigate]);
 
-  // Countdown timer
+  // Focus first input on mount
+  useEffect(() => {
+    inputRefs.current[0]?.focus();
+  }, []);
+
+  // Countdown timer — restarts when expiresAt changes (after resend)
   useEffect(() => {
     if (!expiresAt) return;
     const end = new Date(expiresAt).getTime();
@@ -53,7 +61,8 @@ const OtpVerification = () => {
     return () => clearInterval(id);
   }, [expiresAt]);
 
-  const formatTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  const formatTime = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   const handleChange = (index: number, value: string) => {
     if (!/^\d*$/.test(value)) return;
@@ -75,7 +84,7 @@ const OtpVerification = () => {
     e.preventDefault();
     const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH);
     if (!pasted) return;
-    const next = [...otp];
+    const next = Array(OTP_LENGTH).fill('');
     pasted.split('').forEach((ch, i) => { next[i] = ch; });
     setOtp(next);
     inputRefs.current[Math.min(pasted.length, OTP_LENGTH - 1)]?.focus();
@@ -96,18 +105,34 @@ const OtpVerification = () => {
       const res = await fetch(`${supabaseUrl}/functions/v1/verify-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-        body:    JSON.stringify({ userId, otp: code }),
+        // ✅ Matches backend field name: otpCode
+        body:    JSON.stringify({ userId, otpCode: code }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        toast({ title: 'Invalid OTP', description: data.error || 'The code you entered is incorrect.', variant: 'destructive' });
+        if (data.locked) {
+          // Account locked — show lock state, let user resend to unlock
+          setIsLocked(true);
+          setAttemptsLeft(0);
+          toast({ title: 'Account Locked', description: data.error, variant: 'destructive' });
+        } else {
+          // Wrong code — show remaining attempts
+          if (typeof data.remaining === 'number') setAttemptsLeft(data.remaining);
+          toast({
+            title:       'Incorrect Code',
+            description: data.error || 'The code you entered is incorrect.',
+            variant:     'destructive',
+          });
+        }
+        setOtp(Array(OTP_LENGTH).fill(''));
+        setTimeout(() => inputRefs.current[0]?.focus(), 50);
         setIsVerifying(false);
         return;
       }
 
-      // OTP verified — sign the user in now
+      // ✅ OTP correct — sign the user in
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) {
         toast({ title: 'Sign-in failed', description: signInError.message, variant: 'destructive' });
@@ -115,7 +140,7 @@ const OtpVerification = () => {
         return;
       }
 
-      toast({ title: 'Account verified!', description: 'Welcome to PCS Document Request System.' });
+      toast({ title: 'Email verified!', description: 'Welcome to PCS Document Request System.' });
       navigate('/student/dashboard', { replace: true });
 
     } catch (err: any) {
@@ -130,21 +155,25 @@ const OtpVerification = () => {
       const supabaseUrl     = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
+      // No contactNumber → backend will skip SMS and only send email
       const res = await fetch(`${supabaseUrl}/functions/v1/send-otp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': supabaseAnonKey },
-        // Only email is needed; no contactNumber since this is email OTP
         body:    JSON.stringify({ userId, email }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        toast({ title: 'Failed to resend OTP', description: data.error, variant: 'destructive' });
+        toast({ title: 'Failed to resend', description: data.error, variant: 'destructive' });
       } else {
-        toast({ title: 'OTP Resent', description: 'A new code has been sent to your email.' });
+        toast({ title: 'Code Resent', description: 'A new verification code has been sent to your email.' });
+        // Reset everything for a fresh attempt
         setOtp(Array(OTP_LENGTH).fill(''));
-        inputRefs.current[0]?.focus();
+        setAttemptsLeft(null);
+        setIsLocked(false);
+        if (data.expiresAt) setExpiresAt(data.expiresAt);
+        setTimeout(() => inputRefs.current[0]?.focus(), 50);
       }
     } catch (err: any) {
       toast({ title: 'Error', description: err.message, variant: 'destructive' });
@@ -152,6 +181,8 @@ const OtpVerification = () => {
       setIsResending(false);
     }
   };
+
+  const isExpired = timeLeft === 0 && !!expiresAt;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/70 via-primary-light/60 to-accent/50 p-4">
@@ -178,20 +209,28 @@ const OtpVerification = () => {
               </div>
             </div>
             <div className="flex justify-center">
-              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
-                <Mail className="w-8 h-8 text-primary" />
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center transition-colors ${isLocked ? 'bg-destructive/10' : 'bg-primary/10'}`}>
+                {isLocked
+                  ? <ShieldAlert className="w-8 h-8 text-destructive" />
+                  : <Mail className="w-8 h-8 text-primary" />}
               </div>
             </div>
-            <CardTitle className="text-3xl text-center">Verify Your Email</CardTitle>
+            <CardTitle className="text-3xl text-center">
+              {isLocked ? 'Account Locked' : 'Verify Your Email'}
+            </CardTitle>
             <p className="text-center text-muted-foreground text-sm">
-              We sent a 6-digit code to<br />
-              <span className="font-semibold text-foreground">{email}</span>
+              {isLocked
+                ? 'Too many failed attempts. Click "Resend Code" to get a new code and try again.'
+                : <><span>We sent a 6-digit code to</span><br /><span className="font-semibold text-foreground">{email}</span></>}
             </p>
           </CardHeader>
 
           <CardContent className="space-y-6">
             {/* OTP inputs */}
-            <div className="flex gap-2 justify-center" onPaste={handlePaste}>
+            <div
+              className={`flex gap-2 justify-center transition-opacity ${(isLocked || isExpired) ? 'opacity-40 pointer-events-none' : ''}`}
+              onPaste={handlePaste}
+            >
               {otp.map((digit, i) => (
                 <input
                   key={i}
@@ -202,20 +241,29 @@ const OtpVerification = () => {
                   value={digit}
                   onChange={(e) => handleChange(i, e.target.value)}
                   onKeyDown={(e) => handleKeyDown(i, e)}
-                  className="w-12 h-14 text-center text-xl font-bold border-2 rounded-lg focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all bg-background"
+                  disabled={isLocked || isExpired}
+                  className="w-12 h-14 text-center text-xl font-bold border-2 rounded-lg focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all bg-background disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               ))}
             </div>
 
-            {/* Timer */}
-            {timeLeft > 0 && (
+            {/* Status messages */}
+            {!isLocked && timeLeft > 0 && (
               <p className="text-center text-sm text-muted-foreground">
-                Code expires in <span className="font-semibold text-foreground">{formatTime(timeLeft)}</span>
+                Code expires in{' '}
+                <span className={`font-semibold ${timeLeft <= 60 ? 'text-destructive' : 'text-foreground'}`}>
+                  {formatTime(timeLeft)}
+                </span>
               </p>
             )}
-            {timeLeft === 0 && expiresAt && (
+            {!isLocked && isExpired && (
               <p className="text-center text-sm text-destructive font-medium">
-                Code has expired. Please request a new one.
+                Code has expired. Please request a new one below.
+              </p>
+            )}
+            {!isLocked && attemptsLeft !== null && attemptsLeft > 0 && (
+              <p className="text-center text-sm text-amber-600 font-medium">
+                {attemptsLeft} attempt{attemptsLeft !== 1 ? 's' : ''} remaining before lockout.
               </p>
             )}
 
@@ -223,7 +271,7 @@ const OtpVerification = () => {
             <Button
               onClick={handleVerify}
               className="w-full h-12 text-base font-semibold"
-              disabled={isVerifying || otp.join('').length < OTP_LENGTH}
+              disabled={isVerifying || isLocked || isExpired || otp.join('').length < OTP_LENGTH}
             >
               {isVerifying
                 ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying...</>
@@ -232,7 +280,9 @@ const OtpVerification = () => {
 
             {/* Resend */}
             <div className="text-center">
-              <p className="text-sm text-muted-foreground mb-2">Didn't receive the code?</p>
+              <p className="text-sm text-muted-foreground mb-2">
+                {isLocked ? 'Unlock your account by requesting a new code:' : "Didn't receive the code?"}
+              </p>
               <Button
                 variant="ghost"
                 size="sm"
