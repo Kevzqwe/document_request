@@ -78,24 +78,24 @@ const App = () => (
 
             <Route element={<Layout />}>
 
-              {/* ── Student-only ───────────────────────────────────────── */}
+              {/* ── Student + Alumni ───────────────────────────────────── */}
               <Route path="/student/dashboard" element={
-                <RoleGuard allowedRoles={['student']}>
+                <RoleGuard allowedRoles={['student', 'alumni']}>
                   <Dashboard />
                 </RoleGuard>
               } />
               <Route path="/student/document-request" element={
-                <RoleGuard allowedRoles={['student']}>
+                <RoleGuard allowedRoles={['student', 'alumni']}>
                   <DocumentRequest />
                 </RoleGuard>
               } />
               <Route path="/student/request-history" element={
-                <RoleGuard allowedRoles={['student']}>
+                <RoleGuard allowedRoles={['student', 'alumni']}>
                   <RequestHistory />
                 </RoleGuard>
               } />
               <Route path="/student/account" element={
-                <RoleGuard allowedRoles={['student']}>
+                <RoleGuard allowedRoles={['student', 'alumni']}>
                   <Account />
                 </RoleGuard>
               } />
